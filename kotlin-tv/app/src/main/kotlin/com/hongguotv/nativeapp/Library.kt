@@ -1,0 +1,264 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package com.hongguotv.nativeapp
+
+import android.content.Context
+import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import com.hongguotv.core.*
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
+// The backup and native library use the same immutable progress shape.
+typealias WatchProgress = BackupProgress
+
+/** Memory-only UI access; disk reads, JSON serialization and commits run on workers. */
+class Library(context: Context) {
+    private companion object {
+        // A replacement Activity must not load before its predecessor's final checkpoint commits.
+        val retiredWrites = mutableListOf<LatestWriteQueue<String, () -> Any?>>()
+    }
+    private val app = context.applicationContext
+    private val main = Handler(Looper.getMainLooper())
+    private val loader = Executors.newSingleThreadExecutor { task -> Thread(task, "hongguotv-library-load") }
+    private val prefs by lazy { app.getSharedPreferences("native-library-v1", Context.MODE_PRIVATE) }
+    private val homePrefs by lazy { app.getSharedPreferences("native-home-cache-v1", Context.MODE_PRIVATE) }
+    private val writes = LatestWriteQueue<String, () -> Any?>("hongguotv-library-write", write = { batch -> commit(prefs, batch) },
+        failed = { Log.w("HongguoTV", "Local library commit failed; pending changes retained for retry") })
+    private val homeWrites = LatestWriteQueue<String, () -> Any?>("hongguotv-home-write", write = { batch -> commit(homePrefs, batch) },
+        failed = { Log.w("HongguoTV", "Home cache commit failed") })
+    private var index: LibraryIndex? = null
+    private val homes = mutableMapOf<ContentType, CatalogPage>()
+    private val homeSavedAt = mutableMapOf<ContentType, Long>()
+    private var loading = false
+    private var closed = false
+    private val readyCallbacks = mutableListOf<() -> Unit>()
+    private val errorCallbacks = mutableListOf<(Throwable) -> Unit>()
+    val isLoaded get() = index != null
+
+    /** Call before showing the first page. Successful/error callbacks run on the main thread. */
+    fun loadAsync(onFailure: (Throwable) -> Unit = { Log.e("HongguoTV", "Local library failed to load", it) }, onReady: () -> Unit) {
+        check(!closed)
+        if (isLoaded) { onReady(); return }
+        readyCallbacks += onReady
+        errorCallbacks += onFailure
+        if (loading) return
+        loading = true
+        loader.execute {
+            val result = runCatching {
+                val retired = synchronized(retiredWrites) { retiredWrites.toList() }
+                retired.forEach { check(it.awaitClosed(30, TimeUnit.SECONDS)) { "上次观看记录仍在保存，请稍后重试" } }
+                synchronized(retiredWrites) { retiredWrites.removeAll(retired.toSet()) }
+                val values = prefs.all
+                val loaded = LibraryDisk.decode(values)
+                val now = System.currentTimeMillis()
+                val cached = mutableMapOf<ContentType, CatalogPage>()
+                val stamps = mutableMapOf<ContentType, Long>()
+                val migration = homePrefs.edit()
+                val oldKeys = mutableListOf<String>()
+                ContentType.entries.forEach { type ->
+                    val key = "home-${type.storedValue}"
+                    val legacy = values[key] as? String
+                    val raw = homePrefs.getString(key, null) ?: legacy.orEmpty()
+                    CatalogSnapshot.decode(raw, now)?.let { page ->
+                        cached[type] = page
+                        stamps[type] = org.json.JSONObject(raw).getLong("savedAt")
+                        if (!homePrefs.contains(key)) migration.putString(key, raw)
+                    }
+                    if (legacy != null) oldKeys += key
+                }
+                // Only remove legacy cache after the separate cache has been committed.
+                if (oldKeys.isNotEmpty() && migration.commit()) {
+                    prefs.edit().also { edit -> oldKeys.forEach(edit::remove) }.commit()
+                }
+                Triple(loaded, cached, stamps)
+            }
+            main.post {
+                loading = false
+                if (closed) { readyCallbacks.clear(); errorCallbacks.clear(); return@post }
+                val ready = readyCallbacks.toList(); readyCallbacks.clear()
+                val errors = errorCallbacks.toList(); errorCallbacks.clear()
+                result.onSuccess { (loaded, cached, stamps) ->
+                    index = loaded; homes.putAll(cached); homeSavedAt.putAll(stamps)
+                    ready.forEach { it() }
+                }.onFailure { failure -> errors.forEach { it(failure) } }
+            }
+        }
+    }
+    private fun state(): LibraryIndex = checkNotNull(index) { "Load the local library before accessing it" }
+    private fun put(key: String, value: Any?) { writes.submit(mapOf(key to { value })) }
+    private fun persist(vararg keys: String) {
+        val state = state()
+        val batch = linkedMapOf<String, () -> Any?>()
+        keys.forEach { key ->
+            // Each lambda captures an immutable snapshot; JSON is built by the serial writer.
+            batch[key] = when (key) {
+                "favorites" -> state.favorites().let { rows -> { LibraryDisk.series(rows) } }
+                "later" -> state.later().let { rows -> { LibraryDisk.series(rows) } }
+                "progress" -> state.history().let { rows -> { LibraryDisk.history(rows) } }
+                "favoriteUpdates" -> state.updates().let { rows -> { LibraryDisk.updates(rows) } }
+                "favoriteGroups" -> state.groupsSnapshot().let { rows -> { LibraryDisk.groups(rows) } }
+                "searches" -> state.searches().let { rows -> { SearchHistory.encode(rows) } }
+                "watched" -> state.watched().let { ids -> { ids } }
+                "hidden" -> state.hidden().let { ids -> { ids } }
+                else -> error("Unknown library partition")
+            }
+        }
+        writes.submit(batch)
+    }
+    fun favorites() = state().favorites()
+    fun favorite(id: String) = state().favorite(id)
+    fun later() = state().later()
+    fun queued(id: String) = state().queued(id)
+    fun history(): List<WatchProgress> = state().history()
+    fun progress(id: String): WatchProgress? = state().progress(id)
+    fun searches() = state().searches()
+    fun watched(id: String) = state().watched(id)
+    fun hidden() = state().hidden()
+    fun favoriteUpdate(id: String) = state().favoriteUpdate(id)
+    fun updatedFavorites() = state().updatedFavorites()
+    fun groups() = state().groups()
+    fun groupOf(id: String) = state().groupOf(id)
+    fun setGroup(id: String, group: String?): Boolean = state().setGroup(id, group).also { if (it) persist("favoriteGroups") }
+    fun favoriteLabel(id: String): String = favoriteUpdate(id)?.let {
+        val season = if (it.hasNewSeason) "《${it.newSeasonTitle ?: "新季"}》已上线" else ""
+        val episodes = if (it.added > 0) "新增 ${it.added} 集 · 更新至 ${it.total} 集" else "更新至 ${it.total} 集"
+        listOf(season, episodes).filter { it.isNotEmpty() }.joinToString(" · ")
+    } ?: "尚未检查更新"
+    fun toggle(series: Series) = state().toggle(series).also { persist("favorites", "favoriteUpdates") }
+    fun toggleLater(series: Series) = state().toggleLater(series).also { persist("later") }
+    fun save(progress: WatchProgress) { if (state().save(progress)) persist("progress") }
+    fun setWatched(id: String, value: Boolean) { if (state().setWatched(id, value)) persist("watched") }
+    fun hide(id: String) { state().hide(id); persist("hidden") }
+    fun unhideAll() { state().unhideAll(); persist("hidden") }
+    fun rememberSearch(query: String, type: ContentType) { state().rememberSearch(query, type); persist("searches") }
+    fun forgetSearch(query: String, type: ContentType) { state().forgetSearch(query, type); persist("searches") }
+    fun clearSearches() { state().clearSearches(); persist("searches") }
+    fun removeHistory(id: String) { state().removeHistory(id); persist("progress", "watched") }
+    fun clearHistory() { state().clearHistory(); persist("progress", "watched") }
+    fun observeFavorite(id: String, count: Int, now: Long, acknowledge: Boolean = false, newSeason: Series? = null) {
+        if (state().observeFavorite(id, count, now, acknowledge, newSeason)) persist("favoriteUpdates")
+    }
+    fun cachedHome(type: ContentType): CatalogPage? {
+        state()
+        val age = System.currentTimeMillis() - (homeSavedAt[type] ?: return null)
+        return homes[type].takeIf { age in 0..7 * 24 * 60 * 60 * 1000L }
+    }
+    /** Last 12 热门发现 picks, replayed instantly when the home page is rebuilt. */
+    private var hotCache: List<Series>?=null
+    fun cachedHotPicks(): List<Series> {
+        hotCache?.let { return it }
+        val raw=homePrefs.getString("hot-picks",null) ?: return emptyList<Series>().also { hotCache=it }
+        val items=CatalogSnapshot.decode(raw,System.currentTimeMillis())?.items.orEmpty()
+        hotCache=items
+        return items
+    }
+    fun cacheHotPicks(items: List<Series>) {
+        if(items.isEmpty()) return
+        hotCache=items
+        val now=System.currentTimeMillis()
+        homeWrites.submit(mapOf("hot-picks" to { CatalogSnapshot.encode(items,false,now) }, "hot-picks-at" to { now.toString() }))
+    }
+    /** Epoch millis of the last 热门发现 cache write, 0 when never written. */
+    fun hotPicksSavedAt(): Long = homePrefs.getString("hot-picks-at",null)?.toLongOrNull() ?: 0L
+    fun cacheHome(type: ContentType, items: List<Series>, hasMore: Boolean) {
+        state()
+        if (items.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val retained = items.take(30).map { it.copy(description = it.description.take(1500)) }
+        homes[type] = CatalogPage(retained, hasMore)
+        homeSavedAt[type] = now
+        homeWrites.submit(mapOf("home-${type.storedValue}" to { CatalogSnapshot.encode(retained, hasMore, now) }))
+    }
+    var maxQuality: Int
+        get() = state().settings.quality
+        set(value) { val next = PlaybackQuality.normalize(value); if (next != maxQuality) { state().settings = state().settings.copy(quality = next); put("quality", next) } }
+    var autoNext: Boolean
+        get() = state().settings.autoNext
+        set(value) { if (value != autoNext) { state().settings = state().settings.copy(autoNext = value); put("autoNext", value) } }
+    var autoSeason: Boolean
+        get() = state().settings.autoSeason
+        set(value) { if (value != autoSeason) { state().settings = state().settings.copy(autoSeason = value); put("autoSeason", value) } }
+    var danmaku: Boolean
+        get() = state().settings.danmaku
+        set(value) { if (value != danmaku) { state().settings = state().settings.copy(danmaku = value); put("danmaku", value) } }
+    var danmakuOpacity: Int
+        get() = state().settings.danmakuOpacity
+        set(value) { val next = DanmakuPrefs.opacity(value); if (next != danmakuOpacity) { state().settings = state().settings.copy(danmakuOpacity = next); put("danmakuOpacity", next) } }
+    var danmakuFont: Int
+        get() = state().settings.danmakuFont
+        set(value) { val next = DanmakuPrefs.font(value); if (next != danmakuFont) { state().settings = state().settings.copy(danmakuFont = next); put("danmakuFont", next) } }
+    var danmakuSpeed: Int
+        get() = state().settings.danmakuSpeed
+        set(value) { val next = DanmakuPrefs.speed(value); if (next != danmakuSpeed) { state().settings = state().settings.copy(danmakuSpeed = next); put("danmakuSpeed", next) } }
+    var danmakuRows: Int
+        get() = state().settings.danmakuRows
+        set(value) { val next = DanmakuPrefs.rows(value); if (next != danmakuRows) { state().settings = state().settings.copy(danmakuRows = next); put("danmakuRows", next) } }
+    var contentType: ContentType
+        get() = state().settings.type
+        set(value) { if (value != contentType) { state().settings = state().settings.copy(type = value); put("contentType", value.storedValue) } }
+    var playbackSpeed: Float
+        get() = state().settings.speed
+        set(value) { val next = PlaybackSpeed.normalize(value); if (next != playbackSpeed) { state().settings = state().settings.copy(speed = next); put("playbackSpeed", next) } }
+    var frameMode: VideoFrameMode
+        get() = state().settings.frame
+        set(value) { if (value != frameMode) { state().settings = state().settings.copy(frame = value); put("frameMode", value.name) } }
+    var theme: String
+        get() = prefs.getString("theme", null) ?: "NIGHT"
+        set(value) { prefs.edit().putString("theme", value).apply() }
+    /** Whole-UI text scale, applied as Configuration.fontScale when the Activity attaches. */
+    var fontScale: Float
+        get() = prefs.getFloat("fontScale", 1f).coerceIn(FontScale.steps.first(), FontScale.steps.last())
+        set(value) { prefs.edit().putFloat("fontScale", FontScale.scaleOf(FontScale.indexOf(value))).apply() }
+    // Per-series intro/outro skips stay on this device, outside the backup, like the theme.
+    private var marksCache: LinkedHashMap<String, SkipMark>? = null
+    private fun marks(): LinkedHashMap<String, SkipMark> =
+        marksCache ?: SkipMarks.decode(prefs.getString("skipMarks", null)).also { marksCache = it }
+    fun skipMark(id: String): SkipMark? = marks()[id]
+    fun setSkipMark(id: String, mark: SkipMark?) {
+        val next = SkipMarks.set(marks(), id, mark)
+        marksCache = next
+        prefs.edit().putString("skipMarks", SkipMarks.encode(next)).apply()
+    }
+    fun snapshot() = state().snapshot()
+    fun restore(incoming: BackupData, restoreSettings: Boolean) {
+        val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
+        index = LibraryIndex(merged, state().updates())
+        persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates", "favoriteGroups")
+        writes.submit(mapOf("quality" to { merged.settings.quality }, "playbackSpeed" to { merged.settings.speed },
+            "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name },
+            "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },
+            "danmakuOpacity" to { merged.settings.danmakuOpacity }, "danmakuFont" to { merged.settings.danmakuFont },
+            "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }))
+        flush()
+    }
+    /** Requests prompt background commit, without lifecycle-thread disk waits. */
+    fun flush() { writes.flush(); homeWrites.flush() }
+    /** Drain pending commits after Activity destruction; abrupt process death is still a boundary. */
+    fun close() {
+        if (closed) return
+        closed = true
+        readyCallbacks.clear(); errorCallbacks.clear()
+        loader.shutdown()
+        synchronized(retiredWrites) {
+            writes.close(); homeWrites.close()
+            retiredWrites += writes; retiredWrites += homeWrites
+        }
+    }
+    private fun commit(target: SharedPreferences, values: Map<String, () -> Any?>): Boolean {
+        val edit = target.edit()
+        values.forEach { (key, encode) ->
+            when (val value = encode()) {
+                null -> edit.remove(key)
+                is String -> edit.putString(key, value)
+                is Int -> edit.putInt(key, value)
+                is Float -> edit.putFloat(key, value)
+                is Boolean -> edit.putBoolean(key, value)
+                is Set<*> -> edit.putStringSet(key, value.filterIsInstance<String>().toSet())
+                else -> error("Unsupported library value")
+            }
+        }
+        return edit.commit()
+    }
+}

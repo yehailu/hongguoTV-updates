@@ -287,8 +287,16 @@ class MainActivity: Activity() {
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
         backdropView=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_XY; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         loadBackdrop()
-        connectivity=getSystemService(ConnectivityManager::class.java)
-        runCatching { connectivity.registerDefaultNetworkCallback(networkCallback); networkRegistered=true }
+        connectivity=getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        runCatching {
+            if(android.os.Build.VERSION.SDK_INT>=24) {
+                connectivity.registerDefaultNetworkCallback(networkCallback)
+            } else {
+                // API 21~23 没有 registerDefaultNetworkCallback，用普通 request 回调代替
+                connectivity.registerNetworkCallback(android.net.NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),networkCallback)
+            }
+            networkRegistered=true
+        }
         favoriteMonitor=FavoriteMonitor(library,repository) { refreshFavoriteLabels() }
         mediaSession=TvMediaSession(this,{ if(foreground && screen=="player") requestPlayback(true) },{ if(foreground && screen=="player") requestPlayback(false) },{ position -> if(foreground && screen=="player") seekTo(position) },{ direction -> skipEpisode(direction) },{ if(foreground && screen=="player") returnToDetail() })
         message(base(),"正在读取本机记录…")
@@ -924,7 +932,8 @@ class MainActivity: Activity() {
                     // User is waiting on 换一批: fetch the pages concurrently.
                     val jobs=ContentType.entries.flatMap { type -> pages.map { page -> type to page } }
                     val futures=jobs.map { (type,page) ->
-                        java.util.concurrent.CompletableFuture.supplyAsync({ runCatching { repository.home(page,type,null).items }.getOrDefault(emptyList()) },io)
+                        // 用 ExecutorService.submit 而不是 CompletableFuture：后者 API 24 才有
+                        io.submit<List<Series>> { runCatching { repository.home(page,type,null).items }.getOrDefault(emptyList()) }
                     }
                     futures.forEach { future -> runCatching { collected+=future.get() } }
                 } else {
@@ -1785,7 +1794,8 @@ class MainActivity: Activity() {
         runCatching {
             if(android.os.Build.VERSION.SDK_INT>=31) {
                 surface.setFrameRate(fps,android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS)
-            } else if(android.os.Build.VERSION.SDK_INT>=29) {
+            } else if(android.os.Build.VERSION.SDK_INT>=30) {
+                // 两参数版 setFrameRate 自 API 30 起才有；API 29 上原本会静默失效
                 surface.setFrameRate(fps,android.view.Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
             }
         }
@@ -1824,7 +1834,11 @@ class MainActivity: Activity() {
             } catch(_: Exception) { remote?.close() }
         }
     }
-    private fun networkAvailable(): Boolean = connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
+    private fun networkAvailable(): Boolean {
+        if(android.os.Build.VERSION.SDK_INT>=23) return connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
+        @Suppress("DEPRECATION")
+        return connectivity.activeNetworkInfo?.isConnected==true
+    }
     private fun currentPosition(): Long = pendingSeek ?: player?.currentPosition?.takeIf { playbackReady } ?: startPosition
     private fun cancelRecovery() { main.removeCallbacks(retryRunnable); retryPending=false; autoRecovery=false }
     private fun scheduleRecovery() {

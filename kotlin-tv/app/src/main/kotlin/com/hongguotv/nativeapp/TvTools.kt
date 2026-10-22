@@ -102,12 +102,27 @@ class TvTools(private val activity: Activity) {
         setImageBitmap(Bitmap.createBitmap(pixels,360,360,Bitmap.Config.ARGB_8888))
         contentDescription="二维码"
     }
+    /** 本机局域网 IPv4：直接遍历网卡，API 21 起都可用，不依赖 ConnectivityManager 的新接口 */
+    private fun lanIpv4(): String? = runCatching {
+        java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces() ?: return@runCatching null)
+            .asSequence().filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList().asSequence() }
+            .filterIsInstance<java.net.Inet4Address>()
+            .firstOrNull { it.isSiteLocalAddress }?.hostAddress
+    }.getOrNull()
+
+    /** 当前是否连着 Wi-Fi / 有线网；API 23 起用 NetworkCapabilities，更低版本用 activeNetworkInfo */
+    @Suppress("DEPRECATION")
+    private fun lanLink(cm: ConnectivityManager): Boolean =
+        if(android.os.Build.VERSION.SDK_INT>=23) {
+            val capabilities=cm.getNetworkCapabilities(cm.activeNetwork)
+            capabilities!=null && (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+        } else cm.activeNetworkInfo?.type.let { it==ConnectivityManager.TYPE_WIFI || it==ConnectivityManager.TYPE_ETHERNET }
+
     fun phoneInput(anchor: View?,submit: (String)->Unit) {
-        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
-        val network=connectivity.activeNetwork
-        val capabilities=connectivity.getNetworkCapabilities(network)
-        val address=connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
-        if(address==null || capabilities==null || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+        val connectivity=activity.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val address=lanIpv4()
+        if(address==null || !lanLink(connectivity)) {
             info("手机输入","请让电视和手机连接同一局域网（Wi-Fi 或有线网络）后重试。",anchor); return
         }
         val content=column(); val status=label("正在生成二维码…"); content.addView(status)
@@ -130,10 +145,9 @@ class TvTools(private val activity: Activity) {
         }
     }
     fun libraryTransfer(backup: String,anchor: View?,restore: (BackupData,Boolean)->Unit) {
-        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
-        val network=connectivity.activeNetwork; val capabilities=connectivity.getNetworkCapabilities(network)
-        val address=connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
-        if(address==null || capabilities==null || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+        val connectivity=activity.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val address=lanIpv4()
+        if(address==null || !lanLink(connectivity)) {
             info("备份与恢复","请让电视和手机连接同一局域网后重试。",anchor); return
         }
         val content=column(); val status=label("正在生成二维码…"); content.addView(status)
@@ -165,10 +179,9 @@ class TvTools(private val activity: Activity) {
         }
     }
     fun backdropTransfer(anchor: View?,onImage: (ByteArray,String)->Unit) {
-        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
-        val network=connectivity.activeNetwork; val capabilities=connectivity.getNetworkCapabilities(network)
-        val address=connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
-        if(address==null || capabilities==null || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+        val connectivity=activity.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val address=lanIpv4()
+        if(address==null || !lanLink(connectivity)) {
             info("自定义背景","请让电视和手机连接同一无线网后重试。",anchor); return
         }
         val content=column(); val status=label("正在生成二维码…"); content.addView(status)

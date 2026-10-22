@@ -3,16 +3,26 @@ import java.util.Properties
 plugins { id("com.android.application"); kotlin("android") }
 val signingProperties = Properties().apply { val config = rootProject.file("keystore.properties"); if (config.exists()) config.inputStream().use { load(it) } }
 fun signingValue(env: String, key: String): String? = System.getenv(env) ?: signingProperties.getProperty(key)
+// 包名后缀：-PpkgSuffix=xxx 或环境变量 HONGGUOTV_PKG_SUFFIX，留空则保持原包名
+val pkgSuffix = (System.getenv("HONGGUOTV_PKG_SUFFIX") ?: (project.findProperty("pkgSuffix") as String?))
+    ?.trim()?.takeIf { it.isNotEmpty() }
+// 桌面/电视上的显示名，默认沿用原标题
+val appLabel = (System.getenv("HONGGUOTV_APP_LABEL") ?: (project.findProperty("appLabel") as String?))
+    ?.takeIf { it.isNotBlank() } ?: "红果TV"
+// 最低系统：-PminSdk=24 或环境变量 HONGGUOTV_MIN_SDK，用于兼容老电视（默认 26）
+val minSdkVersion = (System.getenv("HONGGUOTV_MIN_SDK") ?: (project.findProperty("minSdk") as String?))
+    ?.toIntOrNull() ?: 26
 
 android {
     namespace = "com.hongguotv.nativeapp"
     compileSdk = 36
     defaultConfig {
-        applicationId = "com.hongguotv.nativeapp"
-        minSdk = 26
+        applicationId = if (pkgSuffix == null) "com.hongguotv.nativeapp" else "com.hongguotv.nativeapp.$pkgSuffix"
+        minSdk = minSdkVersion
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 25
         versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.22.2"
+        resValue("string", "app_name", appLabel)
     }
     buildFeatures { buildConfig = true }
     signingConfigs {

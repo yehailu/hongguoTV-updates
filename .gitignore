@@ -6,3 +6,4 @@ keystore.properties
 .kotlin/
 build/
 outputs/
+releases/**/*.apk

@@ -1,0 +1,9 @@
+61f2469a3190d7bb386e9aaeb95c4af28e608699d2f9b8f3e1ccffbecf9d826c *hongguotv-0.22.2-android5-debug.apk
+5a7b0d86d3032788f700e14a381fe67fcbff2d7eb718572cd63d6f9a7ffec8a1 *hongguotv-0.22.2-android7-debug.apk
+cea1c981cb1f1108f5cdeb035078628761f461dd1ac8599fa5a785718ed86f86 *hongguotv-0.22.2-android7-r7h34m-debug.apk
+e8674abc557e34662ece6b939deb4bcaaac102eaff38a4b2fb2342a141744607 *hongguotv-0.22.2-r6r77u3-debug.apk
+20220a68d04543bab84a6653c703f415219819f8077f1194587a8a05fdafef95 *hongguotv-0.23.1-debug.apk
+f8834e92bfca5cc3bbb4950411f39f1d06274bafba70e9500a0f2d5a08636768 *hongguotv-0.24.0-hw-phone-android8-debug.apk
+4ae46afb305ab3f7d738b2a0ebdbf86bc4fcdf47e641ea847d4e1f5f5df0055c *hongguotv-0.24.0-softdecode-android7-debug.apk
+34ced3188d64429d658a59f297d1e271fccf72bcf3c5d512429db5c80cebe38b *hongguotv-0.24.0-softdecode-debug.apk
+ac4ab8b4a8b448fc1b63f123fdea551abb5c2607885d8b3d72857f2e74d20bd8 *hongguotv-0.24.0-sw-tv-debug.apk

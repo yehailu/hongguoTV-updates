@@ -11,7 +11,7 @@ val appLabel = (System.getenv("HONGGUOTV_APP_LABEL") ?: (project.findProperty("a
     ?.takeIf { it.isNotBlank() } ?: "红果TV"
 // 最低系统：-PminSdk=24 或环境变量 HONGGUOTV_MIN_SDK，用于兼容老电视（默认 26）
 val minSdkVersion = (System.getenv("HONGGUOTV_MIN_SDK") ?: (project.findProperty("minSdk") as String?))
-    ?.toIntOrNull() ?: 26
+    ?.toIntOrNull() ?: 27
 
 android {
     namespace = "com.hongguotv.nativeapp"
@@ -20,11 +20,25 @@ android {
         applicationId = if (pkgSuffix == null) "com.hongguotv.nativeapp" else "com.hongguotv.nativeapp.$pkgSuffix"
         minSdk = minSdkVersion
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 25
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.22.2"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 28
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.24.0"
         resValue("string", "app_name", appLabel)
+        // TV boxes stay landscape; phone builds pass -PscreenOrientation=unspecified.
+        manifestPlaceholders["screenOrientation"] =
+            (System.getenv("HONGGUOTV_SCREEN_ORIENTATION") ?: (project.findProperty("screenOrientation") as String?)) ?: "landscape"
     }
     buildFeatures { buildConfig = true }
+    flavorDimensions += "decode"
+    productFlavors {
+        // Hardware decode only: no native FFmpeg payload, smallest APK.
+        create("hw") { dimension = "decode" }
+        // Software decode fallback for devices without a HEVC decoder.
+        create("sw") { dimension = "decode" }
+    }
+    defaultConfig {
+        // FFmpeg software decoders ship per ABI; phones are irrelevant, keep the two ARM targets.
+        ndk { abiFilters += listOf("arm64-v8a","armeabi-v7a") }
+    }
     signingConfigs {
         create("delivery") {
             storeFile = signingValue("HONGGUOTV_KEYSTORE", "storeFile")?.let { file(it) }
@@ -45,6 +59,8 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation(project(":core")) { exclude(group = "org.json") }
-    implementation("androidx.media3:media3-exoplayer:1.8.0")
-    implementation("androidx.media3:media3-ui:1.8.0")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-ui:1.11.1")
+    // FFmpeg software decoders (HEVC/H.264/VP9/AV1) only in the sw flavor.
+    "swImplementation"("io.github.anilbeesetti:nextlib-media3ext:1.11.1-0.16.0")
 }

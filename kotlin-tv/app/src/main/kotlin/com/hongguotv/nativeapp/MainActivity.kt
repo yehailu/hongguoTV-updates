@@ -101,6 +101,27 @@ class MainActivity: Activity() {
     // The shelf is served from cache instantly but re-dealt once it is older than a day.
     private val hotTtlMillis=24*60*60*1000L
     private var hotRefreshDue=false
+    // Set when the platform decoder rejects the stream; the player is rebuilt with FFmpeg software decoding.
+    private var softDecodeForced=false
+    private var softRetryUsed=false
+    private var videoCodec=""
+    /** Codecs this device actually decodes, used to skip variants it can never play. */
+    private val deviceCodecs: Set<String> by lazy {
+        runCatching {
+            android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+                .filter { !it.isEncoder }
+                .flatMap { info -> info.supportedTypes.toList() }
+                .mapNotNull { mime ->
+                    when(mime) {
+                        "video/avc" -> "avc"
+                        "video/hevc" -> "hevc"
+                        "video/av01" -> "av1"
+                        "video/x-vnd.on2.vp9" -> "vp9"
+                        else -> null
+                    }
+                }.toSet()
+        }.getOrDefault(emptySet())
+    }
     private var hotDraws=0
     // Shuffled copy of the pool: batches are dealt without replacement, so a pool never repeats.
     private var homeFromCache=false
@@ -1122,6 +1143,8 @@ class MainActivity: Activity() {
         defaultSpeed=setting(playback,"默认倍速  ·  ${PlaybackSpeed.label(library.playbackSpeed)}") { showSpeedPicker(defaultSpeed,false) }
         lateinit var frame: TextView
         frame=setting(playback,"画面模式  ·  ${library.frameMode.label}") { showFramePicker(frame,false) }
+        lateinit var codecInfo: TextView
+        codecInfo=setting(playback,"解码信息  ·  查看本机解码能力") { showCodecInfo(codecInfo) }
         lateinit var autoNextButton: TextView
         autoNextButton=setting(playback,"自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}") {
             library.autoNext=!library.autoNext
@@ -1219,7 +1242,7 @@ class MainActivity: Activity() {
             setOnFocusChangeListener { _,focused -> setTextColor(if(focused) accent else muted) }
         }
         rechainSettings={
-            val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton)
+            val left=listOf(qualityButton,defaultSpeed,frame,codecInfo,autoNextButton,autoSeasonButton)
             val middle=listOf(danmakuButton)+(if(library.danmaku) danmakuPrefRows else emptyList())
             val right=listOf(themeButton,fontSizeButton,backdropButton,backup,hidden,clearCache,license)
             val columns=listOf(left,middle,right)
@@ -1725,10 +1748,10 @@ class MainActivity: Activity() {
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
         work({ prefetched ?: RemoteVideo(repository.http,repository.stream(requestedId,maxQuality)).prepare() }, { remote ->
-            video=remote; quality=remote.info.quality
+            video=remote; quality=remote.info.quality; videoCodec=remote.info.codec
             val p=player ?: run {
                 val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,500,1000).setTargetBufferBytes(12*1024*1024).build()
-                val renderers=androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true)
+                val renderers=DecodeSupport.renderers(this,softDecodeForced)
                 ExoPlayer.Builder(this,renderers).setLoadControl(load).build().also {
                     player=it; playerView?.player=it
                     it.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
@@ -1850,24 +1873,75 @@ class MainActivity: Activity() {
         retryPending=true; main.postDelayed(retryRunnable,delay)
     }
     private fun playerFailure(problem: Throwable) {
+        val failedCodec=problem is PlaybackException && problem.errorCode in 3000..4999
+        if(failedCodec && !softRetryUsed) {
+            // The platform decoder cannot handle this stream: rebuild with FFmpeg software decoding.
+            softRetryUsed=true; softDecodeForced=true
+            val position=currentPosition().coerceAtLeast(0)
+            android.util.Log.i("HongguoTV","Platform decode failed codec=$videoCodec, switching to software decoder")
+            player?.stop()
+            playEpisode(episodeIndex,position,requestedAutoplay,recovering=true)
+            return
+        }
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
         saveProgress(); cancelRecovery(); cancelPrefetch()
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
-        playbackText.text=if(decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
+        playbackText.text=if(decoding) {
+            val codec=when(videoCodec) { "hevc" -> "HEVC/H.265"; "av1" -> "AV1"; "avc" -> "H.264"; "vp9" -> "VP9"; "" -> "未知"; else -> videoCodec }
+            "本机硬件解码器不支持 $codec，已尝试切换 FFmpeg 软件解码。"
+        } else "播放失败，可重试或切换清晰度。"
         val actions=row(); controls.addView(actions)
         // Failure screen gets one primary action instead of three look-alike buttons.
         val retryNow=primaryButton("立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }
         actions.addView(retryNow,lp(-2,dp(44)).apply { rightMargin=dp(10) })
         retryNow.requestFocus()
-        addButton(actions,"尝试 720P") { library.maxQuality=720; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+        if(decoding) addButton(actions,"软解重试") {
+            softDecodeForced=true; softRetryUsed=true
+            playEpisode(episodeIndex,retryPosition,retryAutoplay)
+        } else addButton(actions,"尝试 720P") { library.maxQuality=720; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
         addButton(actions,"返回选集") { returnToDetail(true) }
         if(retryable && !sleepStopped) {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
             autoRecovery=true; scheduleRecovery()
         }
         android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""))
+    }
+    /** On-device answer to "why can't this play": what the SoC decodes and what the stream uses. */
+    private fun showCodecInfo(anchor: TextView) {
+        val report=codecReport()
+        AlertDialog.Builder(this).setTitle("解码信息").setMessage(report)
+            .setPositiveButton("关闭",null)
+            .setNeutralButton("写入日志") { _, _ ->
+                android.util.Log.i("HongguoTV","CODEC_REPORT\n$report")
+                Toast.makeText(this,"已写入日志（标签 HongguoTV）",Toast.LENGTH_SHORT).show()
+            }.show()
+    }
+    private fun codecReport(): String {
+        val sb=StringBuilder()
+        sb.append("设备：").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL).append('\n')
+        sb.append("系统：Android ").append(android.os.Build.VERSION.RELEASE).append("（API ").append(android.os.Build.VERSION.SDK_INT).append("）\n")
+        sb.append("平台：").append(android.os.Build.HARDWARE).append('\n')
+        val infos=runCatching { android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos.toList() }.getOrDefault(emptyList())
+        fun describe(mime: String): String {
+            val matching=infos.filter { info -> !info.isEncoder && info.supportedTypes.any { it.equals(mime,true) } }
+            if(matching.isEmpty()) return "无"
+            return matching.joinToString("；") { info ->
+                val hw=if(android.os.Build.VERSION.SDK_INT>=29) (if(info.isHardwareAccelerated) "硬件" else "软件") else "未知"
+                val level=runCatching { info.getCapabilitiesForType(mime).profileLevels.maxOfOrNull { it.level } ?: 0 }.getOrDefault(0)
+                "${info.name}（$hw"+(if(level>0) " · level $level" else "")+"）"
+            }
+        }
+        val hevc=describe("video/hevc")
+        sb.append("\nH.265 / HEVC：").append(hevc).append('\n')
+        sb.append("H.264 / AVC：").append(describe("video/avc")).append('\n')
+        sb.append("AV1：").append(describe("video/av01")).append('\n')
+        sb.append("VP9：").append(describe("video/x-vnd.on2.vp9")).append('\n')
+        sb.append("\n当前片源：").append(if(videoCodec.isBlank()) "未播放" else "$quality · $videoCodec")
+        sb.append("\n软件解码：").append(if(DecodeSupport.softwareAvailable) "FFmpeg 可用" else "不含（仅硬件）")
+        if(hevc=="无") sb.append("\n\n本机没有 H.265 解码器，而片源只有 H.265（1080P~360P 全是），因此无法播放；降低清晰度也没有用。")
+        return sb.toString()
     }
     /** Seven-level text scale as a seek bar: three steps smaller and three larger than 100%. */
     private fun showFontScalePicker(anchor: TextView) {

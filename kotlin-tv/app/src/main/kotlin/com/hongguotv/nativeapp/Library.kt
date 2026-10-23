@@ -207,6 +207,10 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
+    /** Force H.264 streams for devices whose HEVC/AV1 decoders are missing or broken. */
+    var avcOnly: Boolean
+        get() = prefs.getBoolean("avcOnly", false)
+        set(value) { prefs.edit().putBoolean("avcOnly", value).apply() }
     /** Whole-UI text scale, applied as Configuration.fontScale when the Activity attaches. */
     var fontScale: Float
         get() = prefs.getFloat("fontScale", 1f).coerceIn(FontScale.steps.first(), FontScale.steps.last())

@@ -7,6 +7,7 @@ fun main(args: Array<String>) {
             val first=repository.comicRanking()
             val metadata=checkNotNull(first.ranking)
             check(first.items.isNotEmpty())
+            println("ids="+first.items.take(5).map { it.id })
             val seen=mutableSetOf<String>()
             for(pageNumber in listOf(1,2,metadata.totalPages).distinct().filter { it<=metadata.totalPages }) {
                 val result=if(pageNumber==1) first else repository.comicRanking(pageNumber)
@@ -24,6 +25,48 @@ fun main(args: Array<String>) {
         }
         return
     }
+    // Stream-level inspection: what the first megabyte actually contains (profile, bit depth).
+    args.firstOrNull { it.startsWith("--stream=") }?.substringAfter("=")?.let { id ->
+        val detail=repository.detail(id)
+        val episode=detail.episodes.first()
+        val cap=args.firstOrNull { it.startsWith("--cap=") }?.substringAfter("=")?.toIntOrNull() ?: 1080
+        val stream=repository.stream(episode,cap)
+        println("stream quality=${stream.quality} codec=${stream.codec}")
+        RemoteVideo(repository.http,stream).use { remote ->
+            remote.prepare()
+            val head=remote.read(0,minOf(1024*1024L,remote.total).toInt())
+            val text=String(head,Charsets.ISO_8859_1)
+            val hvc=text.indexOf("hvcC")
+            val sampleEntry=listOf("hvc1","hev1","avc1","av01").firstOrNull { text.contains(it) } ?: "?"
+            if(hvc>=0) {
+                val b=head.copyOfRange(hvc+4,minOf(hvc+4+23,head.size))
+                val profileIdc=b[1].toInt() and 0x1F
+                val levelIdc=b[12].toInt() and 0xFF
+                val chroma=b[16].toInt() and 0x03
+                val bitDepthLuma=(b[17].toInt() and 0x07)+8
+                println("mp4 sampleEntry=$sampleEntry hvcC profile=$profileIdc level=$levelIdc bitDepth=$bitDepthLuma chromaFormat=$chroma")
+            } else println("mp4 sampleEntry=$sampleEntry no-hvcC (avc/other)")
+            println("total=${remote.total}")
+        }
+        return
+    }
+    args.firstOrNull { it.startsWith("--home=") }?.substringAfter("=")?.let { raw ->
+        val homeType=ContentType.entries.firstOrNull { it.storedValue==raw.lowercase() } ?: ContentType.SHORT
+        val page=repository.home(1,homeType)
+        println("home=${homeType.label}; items=${page.items.size}; ids="+page.items.take(8).map { it.id })
+        return
+    }
+    // Direct series id: skips search/home so the probe still works when those endpoints change.
+    args.firstOrNull { it.startsWith("--id=") }?.substringAfter("=")?.let { id ->
+        val detail=repository.detail(id)
+        println("detail=${detail.series.title}; episodes=${detail.episodes.size}")
+        val sample=listOf(detail.episodes.first(),detail.episodes[detail.episodes.size/2],detail.episodes.last()).distinct()
+        for(episode in sample) {
+            val report=runCatching { repository.variantReport(episode) }.getOrElse { listOf("error=${it.message}") }
+            println("episode=$episode variants=$report")
+        }
+        return
+    }
     val type=if(args.contains("--comic")) ContentType.COMIC else ContentType.SHORT
     val keyword=if(type==ContentType.COMIC) "修仙" else "总裁"
     val search=repository.search(keyword,type=type); println("search=${search.items.size}; hasMore=${search.hasMore}")
@@ -38,6 +81,12 @@ fun main(args: Array<String>) {
     }
     val detail=repository.detail(args.firstOrNull { it.matches(Regex("[0-9]{1,30}")) } ?: home.items.first().id)
     println("detail=${detail.series.title}; episodes=${detail.episodes.size}")
+    if(args.contains("--variants")) {
+        for(episode in detail.episodes.take(3)) {
+            val report=runCatching { repository.variantReport(episode) }.getOrElse { listOf("error=${it.message}") }
+            println("episode=$episode variants=$report")
+        }
+    }
     val stream=repository.stream(detail.episodes.first())
     RemoteVideo(repository.http,stream).use { remote ->
         remote.prepare(); val first=remote.read(0,1024*1024)

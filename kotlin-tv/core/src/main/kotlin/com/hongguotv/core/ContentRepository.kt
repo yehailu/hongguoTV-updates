@@ -148,13 +148,19 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         }
         return CatalogPage(merged,short?.hasMore==true || comic?.hasMore==true)
     }
+    /**
+     * The search page became a client-rendered React app, so the old _ROUTER_DATA scrape no longer
+     * exists; the site now exposes a JSON endpoint at /api/search/result/ with the same searchList
+     * rows (video_data.series_id / series_title / series_cover / genre).
+     */
     private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
-        val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
-        val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
-        val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
+        val data=JSONObject(text("$site/api/search/result/?query=${Signer.encode(keyword)}&page=$page"))
+        val rows=data.optJSONArray("searchList") ?: throw IOException("搜索数据暂不可用")
         val mapped=rows.objects().let { list -> if(genre==null) list else list.filter { (it.optJSONObject("video_data") ?: it).optString("genre")==genre } }.map(::card)
         val items=valid(mapped)
-        return CatalogPage(items,items.isNotEmpty() && page<100)
+        val lastPage=data.optInt("totalPages",100).coerceIn(1,100)
+        val hasMore=data.optBoolean("hasMore",items.isNotEmpty() && page<lastPage)
+        return CatalogPage(items,hasMore && page<lastPage)
     }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
         VendorConstants.regenerate()

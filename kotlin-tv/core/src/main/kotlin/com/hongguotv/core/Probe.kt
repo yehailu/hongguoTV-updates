@@ -2,6 +2,17 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    args.firstOrNull { it.startsWith("--search=") }?.substringAfter("=")?.let { keyword ->
+        for(type in ContentType.entries) {
+            val page=runCatching { repository.search(keyword,1,type) }
+            println("type=${type.label} count=${page.getOrNull()?.items?.size} hasMore=${page.getOrNull()?.hasMore} err=${page.exceptionOrNull()?.message}")
+            page.getOrNull()?.items?.take(3)?.forEach { println("  - ${it.title} (${it.id}) genre=${it.badge}") }
+        }
+        val merged=runCatching { repository.searchMerged(keyword,1) }
+        println("merged count=${merged.getOrNull()?.items?.size} hasMore=${merged.getOrNull()?.hasMore} err=${merged.exceptionOrNull()?.message}")
+        merged.getOrNull()?.items?.take(4)?.forEach { println("  * ${it.title} (${it.id})") }
+        return
+    }
     if(args.contains("--ranking")) {
         try {
             val first=repository.comicRanking()

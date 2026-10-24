@@ -20,8 +20,8 @@ android {
         applicationId = if (pkgSuffix == null) "com.hongguotv.nativeapp" else "com.hongguotv.nativeapp.$pkgSuffix"
         minSdk = minSdkVersion
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 28
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.24.0"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 30
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.24.2"
         resValue("string", "app_name", appLabel)
         // TV boxes stay landscape; phone builds pass -PscreenOrientation=unspecified.
         manifestPlaceholders["screenOrientation"] =

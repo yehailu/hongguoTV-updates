@@ -48,8 +48,18 @@ class MainActivity: Activity() {
     private val accent by lazy { TvStyle.accent }; private val white by lazy { TvStyle.text }; private val muted by lazy { TvStyle.muted }
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
-    private val repository=ContentRepository()
-    private val danmakuRepo=DanmakuRepository(repository.http)
+    // Lazily built so TlsSupport can read assets: Activity properties initialise before attach().
+    private val httpClient by lazy {
+        TlsSupport.client(
+            okhttp3.OkHttpClient.Builder()
+                .connectTimeout(15,java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30,java.util.concurrent.TimeUnit.SECONDS)
+                .callTimeout(45,java.util.concurrent.TimeUnit.SECONDS),
+            this
+        ).build()
+    }
+    private val repository by lazy { ContentRepository(httpClient) }
+    private val danmakuRepo by lazy { DanmakuRepository(repository.http) }
     private val networkCleanup=Executors.newSingleThreadExecutor()
     private val prefetchWorker=Executors.newSingleThreadExecutor()
     private var prefetchHttp: okhttp3.OkHttpClient?=null
@@ -402,7 +412,12 @@ class MainActivity: Activity() {
     private fun message(parent: LinearLayout,label: String) { parent.addView(text(label,17f,muted).apply { setPadding(0,dp(28),0,dp(18)) }) }
     private fun error(parent: LinearLayout,problem: Throwable,retry: ()->Unit) {
         message(parent,"暂时无法加载，请检查网络后重试。")
-        val detail=if(problem is java.net.UnknownHostException) "无法连接内容网站" else if(problem is java.net.SocketTimeoutException) "连接超时" else problem.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(160)
+        val detail=when {
+            TlsSupport.isCertificateProblem(problem) -> "证书校验失败：这台设备的系统证书库太旧，或系统时间不对（也可能是所连 Wi-Fi 需要网页登录）。本版已内置常用根证书，若仍失败请检查系统时间后重试。"
+            problem is java.net.UnknownHostException -> "无法连接内容网站"
+            problem is java.net.SocketTimeoutException -> "连接超时"
+            else -> problem.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(160)
+        }
         parent.addView(text(detail,13f,muted)); addButton(parent,"重试",onClick=retry).requestFocus()
     }
     private fun switchTab(next: Int) {
@@ -1844,7 +1859,10 @@ class MainActivity: Activity() {
         if(prefetchAttempts>=3 || (prefetchAttempts>0 && now-prefetchAttemptAt<15_000) || connectivity.isActiveNetworkMetered || !networkAvailable()) return
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
-        val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
+        val http=TlsSupport.client(
+            okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS),
+            this
+        ).build()
         val source=ContentRepository(http); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
@@ -1888,7 +1906,9 @@ class MainActivity: Activity() {
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
-        playbackText.text=if(decoding) {
+        playbackText.text=if(TlsSupport.isCertificateProblem(problem)) {
+            "证书校验失败，无法取流。请检查设备系统时间是否正确；本版已内置常用根证书，仍失败可换网络再试。"
+        } else if(decoding) {
             val codec=when(videoCodec) { "hevc" -> "HEVC/H.265"; "av1" -> "AV1"; "avc" -> "H.264"; "vp9" -> "VP9"; "" -> "未知"; else -> videoCodec }
             "本机硬件解码器不支持 $codec，已尝试切换 FFmpeg 软件解码。"
         } else "播放失败，可重试或切换清晰度。"

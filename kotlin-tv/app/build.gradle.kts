@@ -20,20 +20,30 @@ android {
         applicationId = if (pkgSuffix == null) "com.hongguotv.nativeapp" else "com.hongguotv.nativeapp.$pkgSuffix"
         minSdk = minSdkVersion
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 30
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.24.2"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 32
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.25.0"
         resValue("string", "app_name", appLabel)
         // TV boxes stay landscape; phone builds pass -PscreenOrientation=unspecified.
         manifestPlaceholders["screenOrientation"] =
             (System.getenv("HONGGUOTV_SCREEN_ORIENTATION") ?: (project.findProperty("screenOrientation") as String?)) ?: "landscape"
     }
     buildFeatures { buildConfig = true }
+    val variantOverride = (project.findProperty("variantId") as String?)?.takeIf { it.isNotBlank() }
     flavorDimensions += "decode"
     productFlavors {
         // Hardware decode only: no native FFmpeg payload, smallest APK.
-        create("hw") { dimension = "decode" }
+        create("hw") {
+            dimension = "decode"
+            // Phones: hardware decoding only, rotatable, Android 8.0+.
+            buildConfigField("String", "VARIANT_ID", "\"${variantOverride ?: "hw-phone"}\"")
+        }
         // Software decode fallback for devices without a HEVC decoder.
-        create("sw") { dimension = "decode" }
+        create("sw") {
+            dimension = "decode"
+            // TV / car: FFmpeg software decoding. Android 7 builds use the sw-a7 asset.
+            val fallback = if (minSdkVersion >= 27) "sw-tv" else "sw-a7"
+            buildConfigField("String", "VARIANT_ID", "\"${variantOverride ?: fallback}\"")
+        }
     }
     defaultConfig {
         // FFmpeg software decoders ship per ABI; phones are irrelevant, keep the two ARM targets.
@@ -59,6 +69,7 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation(project(":core")) { exclude(group = "org.json") }
+    implementation("androidx.core:core:1.13.1")
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     // FFmpeg software decoders (HEVC/H.264/VP9/AV1) only in the sw flavor.

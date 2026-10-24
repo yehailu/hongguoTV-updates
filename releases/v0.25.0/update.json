@@ -1,0 +1,35 @@
+{
+  "versionCode": 32,
+  "versionName": "0.25.0",
+  "notes": "1) 新增应用内更新：设置里可检查更新，发现新版后应用内下载并调起系统安装（需授予「安装未知应用」权限）。2) 自动检查：启动后每天最多一次，播放中不打扰，可在设置里关闭。3) 修复搜索不可用与旧设备证书校验失败（沿用 0.24.2）。",
+  "variants": {
+    "sw-tv": {
+      "versionCode": 32,
+      "versionName": "0.25.0",
+      "file": "hongguotv-0.25.0-sw-tv-debug.apk",
+      "size": 25432707,
+      "sha256": "1ead4de3f7677266cae39d28975584f401341c9c68eda5da9c4b4fc7e2328ee8"
+    },
+    "sw-a7": {
+      "versionCode": 32,
+      "versionName": "0.25.0",
+      "file": "hongguotv-0.25.0-sw-a7-debug.apk",
+      "size": 26317443,
+      "sha256": "69089eea5c3f3da83b1a84bfb8da6aeb318e1b803cdccc5a2efe0daabaaddaee"
+    },
+    "hw-phone": {
+      "versionCode": 32,
+      "versionName": "0.25.0",
+      "file": "hongguotv-0.25.0-hw-phone-debug.apk",
+      "size": 10326422,
+      "sha256": "a387010c4f89548b58f049818e591094af5485b0f177255c94cbcc94a2ee9295"
+    },
+    "a5": {
+      "versionCode": 33,
+      "versionName": "0.22.4",
+      "file": "hongguotv-0.22.4-android5-debug.apk",
+      "size": 10854884,
+      "sha256": "38aabf391be8b1d61f7fc08b4683aec54952b9453171786f629ae94603cdbfe8"
+    }
+  }
+}

@@ -207,6 +207,13 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
+    /** Background update check, at most once per day. */
+    var autoUpdate: Boolean
+        get() = prefs.getBoolean("autoUpdate", true)
+        set(value) { prefs.edit().putBoolean("autoUpdate", value).apply() }
+    var lastUpdateCheck: Long
+        get() = prefs.getLong("lastUpdateCheck", 0L)
+        set(value) { prefs.edit().putLong("lastUpdateCheck", value).apply() }
     /** Force H.264 streams for devices whose HEVC/AV1 decoders are missing or broken. */
     var avcOnly: Boolean
         get() = prefs.getBoolean("avcOnly", false)

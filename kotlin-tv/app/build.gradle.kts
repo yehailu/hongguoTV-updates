@@ -20,8 +20,9 @@ android {
         applicationId = if (pkgSuffix == null) "com.hongguotv.nativeapp" else "com.hongguotv.nativeapp.$pkgSuffix"
         minSdk = minSdkVersion
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 31
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.22.3"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 33
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.22.4"
+        buildConfigField("String", "VARIANT_ID", "\"a5\"")
         resValue("string", "app_name", appLabel)
     }
     buildFeatures { buildConfig = true }

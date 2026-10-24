@@ -174,6 +174,13 @@ class Library(context: Context) {
     var maxQuality: Int
         get() = state().settings.quality
         set(value) { val next = PlaybackQuality.normalize(value); if (next != maxQuality) { state().settings = state().settings.copy(quality = next); put("quality", next) } }
+    /** Background update check, at most once per day. */
+    var autoUpdate: Boolean
+        get() = prefs.getBoolean("autoUpdate", true)
+        set(value) { prefs.edit().putBoolean("autoUpdate", value).apply() }
+    var lastUpdateCheck: Long
+        get() = prefs.getLong("lastUpdateCheck", 0L)
+        set(value) { prefs.edit().putLong("lastUpdateCheck", value).apply() }
     var autoNext: Boolean
         get() = state().settings.autoNext
         set(value) { if (value != autoNext) { state().settings = state().settings.copy(autoNext = value); put("autoNext", value) } }

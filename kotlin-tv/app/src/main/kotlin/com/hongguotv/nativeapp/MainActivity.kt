@@ -309,6 +309,7 @@ class MainActivity: Activity() {
         }
         favoriteMonitor=FavoriteMonitor(library,repository) { refreshFavoriteLabels() }
         mediaSession=TvMediaSession(this,{ if(foreground && screen=="player") requestPlayback(true) },{ if(foreground && screen=="player") requestPlayback(false) },{ position -> if(foreground && screen=="player") seekTo(position) },{ direction -> skipEpisode(direction) },{ if(foreground && screen=="player") returnToDetail() })
+        android.util.Log.i("HongguoTV","build variant="+BuildConfig.VARIANT_ID+" version="+BuildConfig.VERSION_NAME+"("+BuildConfig.VERSION_CODE+")")
         message(base(),"正在读取本机记录…")
         loadLibrary()
     }
@@ -925,6 +926,7 @@ class MainActivity: Activity() {
             homeContentLogged=true
             body.post { android.util.Log.i("HongguoTV","Home content ready cached=$homeFromCache elapsedMs=${android.os.SystemClock.elapsedRealtime()-activityStarted}") }
         }
+        body.post { maybeAutoUpdate() }
         if(launchStarted>0) {
             val started=launchStarted; launchStarted=0
             body.post { android.util.Log.i("HongguoTV","Home displayed cached=$homeFromCache elapsedMs=${android.os.SystemClock.elapsedRealtime()-started}") }
@@ -1182,6 +1184,13 @@ class MainActivity: Activity() {
         }
         lateinit var fontSizeButton: TextView
         fontSizeButton=setting(device,"文字大小  ·  ${FontScale.label(FontScale.indexOf(library.fontScale))}") { showFontScalePicker(fontSizeButton) }
+        lateinit var updateButton: TextView
+        updateButton=setting(device,"检查更新  ·  当前 ${BuildConfig.VERSION_NAME}") { checkForUpdates(manual=true) }
+        lateinit var autoUpdateButton: TextView
+        autoUpdateButton=setting(device,"自动检查更新  ·  ${if(library.autoUpdate) "开启" else "关闭"}") {
+            library.autoUpdate=!library.autoUpdate
+            autoUpdateButton.text="自动检查更新  ·  ${if(library.autoUpdate) "开启" else "关闭"}"
+        }
         lateinit var backdropButton: TextView
         fun backdropLabel()="自定义背景  ·  ${if(backdropFile()!=null) "已启用" else if(backdropStyle()=="forced") "强制欣赏" else "默认风格"}"
         backdropButton=setting(device,backdropLabel()) {
@@ -1236,7 +1245,7 @@ class MainActivity: Activity() {
         rechainSettings={
             val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,autoSeasonButton)
             val middle=listOf(danmakuButton)+(if(library.danmaku) danmakuPrefRows else emptyList())
-            val right=listOf(themeButton,fontSizeButton,backdropButton,backup,hidden,clearCache,license)
+            val right=listOf(themeButton,fontSizeButton,updateButton,autoUpdateButton,backdropButton,backup,hidden,clearCache,license)
             val columns=listOf(left,middle,right)
             columns.forEach { items -> items.forEachIndexed { index,view ->
                 view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
@@ -1888,6 +1897,61 @@ class MainActivity: Activity() {
         android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""))
     }
     /** Seven-level text scale as a seek bar: three steps smaller and three larger than 100%. */
+    private var updateChecking=false
+
+    private fun checkForUpdates(manual: Boolean) {
+        if(updateChecking || isDestroyed) return
+        updateChecking=true
+        if(manual) Toast.makeText(this,"正在检查更新…",Toast.LENGTH_SHORT).show()
+        io.execute {
+            val info=runCatching { UpdateCenter.check(httpClient,BuildConfig.VARIANT_ID,BuildConfig.VERSION_CODE) }.getOrNull()
+            main.post {
+                updateChecking=false
+                if(isDestroyed) return@post
+                library.lastUpdateCheck=System.currentTimeMillis()
+                when {
+                    info!=null -> showUpdateDialog(info)
+                    manual -> Toast.makeText(this,"已是最新版本（${BuildConfig.VERSION_NAME}）",Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+    private fun maybeAutoUpdate() {
+        if(!library.autoUpdate || updateChecking || screen=="player" || player!=null) return
+        if(System.currentTimeMillis()-library.lastUpdateCheck<24*60*60*1000L) return
+        checkForUpdates(manual=false)
+    }
+    private fun showUpdateDialog(info: UpdateCenter.Info) {
+        val notes=info.notes.ifBlank { "包含问题修复与稳定性改进。" }
+        AlertDialog.Builder(this).setTitle("发现新版本 ${info.versionName}")
+            .setMessage("当前 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）\n\n$notes")
+            .setPositiveButton("立即更新") { _, _ -> startUpdateDownload(info) }
+            .setNegativeButton("稍后",null)
+            .show()
+    }
+    private fun startUpdateDownload(info: UpdateCenter.Info) {
+        val panel=column().apply { setPadding(dp(24),dp(18),dp(24),dp(6)) }
+        val label=text("正在下载 ${info.versionName}…",14f)
+        val bar=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=100; progress=0 }
+        panel.addView(label)
+        panel.addView(bar,lp(-1,dp(26)).apply { topMargin=dp(12) })
+        val dialog=AlertDialog.Builder(this).setTitle("应用内更新").setView(panel).setCancelable(false).setNegativeButton("取消",null).create()
+        var cancelled=false
+        dialog.setOnDismissListener { cancelled=true }
+        dialog.show()
+        val target=java.io.File(cacheDir,"updates/${info.file}")
+        io.execute {
+            val file=UpdateCenter.download(httpClient,info,target) { percent ->
+                main.post { if(dialog.isShowing) { bar.progress=percent; label.text="正在下载 ${info.versionName}… $percent%" } }
+            }
+            main.post {
+                if(cancelled || isDestroyed) return@post
+                dialog.dismiss()
+                if(file==null) { Toast.makeText(this,"下载校验失败，请稍后重试",Toast.LENGTH_LONG).show(); return@post }
+                if(!UpdateCenter.install(this,file)) Toast.makeText(this,"请在系统设置里允许本应用安装未知应用，然后再点一次检查更新",Toast.LENGTH_LONG).show()
+            }
+        }
+    }
     private fun showFontScalePicker(anchor: TextView) {
         val panel=column().apply { setPadding(dp(22),dp(14),dp(22),0) }
         var index=FontScale.indexOf(library.fontScale)

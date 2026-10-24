@@ -64,8 +64,11 @@ class ArtworkLoader(context: Context) {
     }
     private val disk = ArtworkCache(File(context.applicationContext.cacheDir, "artwork-v1"))
     // This client owns its dispatcher and pool; cancelling artwork never cancels video or catalog calls.
-    private val http = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
+    private val http = TlsSupport.client(
+        OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS),
+        context.applicationContext
+    ).build()
     private val workers = Executors.newFixedThreadPool(if (lowRam) 1 else 2) { runnable ->
         Thread(runnable, "hongguotv-artwork").apply { priority = Thread.NORM_PRIORITY - 1 }
     }

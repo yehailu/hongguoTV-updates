@@ -1,0 +1,35 @@
+{
+    "versionCode":  36,
+    "versionName":  "0.26.1",
+    "notes":  "1) 修复播放：平台 10-14 改了取流接口，改用 /novel/player/video_model/v1/（video_id 单值），并保留带场景段与旧路径作为候选，空响应先重试再换路。2) 修复剧场/排行榜：站点榜单与分类页偶发 200+空响应或超时，页面请求统一重试 4 次；漫剧首页失败时回退到分类目录。3) 沿用 0.26.0 的匿名设备注册与 Cookie。",
+    "variants":  {
+                     "sw-tv":  {
+                                   "versionCode":  36,
+                                   "versionName":  "0.26.1",
+                                   "file":  "hongguotv-0.26.1-sw-tv-debug.apk",
+                                   "size":  25432707,
+                                   "sha256":  "d02bda0639b11f54f2dd37b14b6f8afbaa82801c14b7c79320c2e8caace417ac"
+                               },
+                     "sw-a7":  {
+                                   "versionCode":  36,
+                                   "versionName":  "0.26.1",
+                                   "file":  "hongguotv-0.26.1-sw-a7-debug.apk",
+                                   "size":  26333827,
+                                   "sha256":  "cca12bcd8b4676c9bda59a69fa0a47be0142536982fec3ee9f9bed3b8780ef44"
+                               },
+                     "hw-phone":  {
+                                      "versionCode":  36,
+                                      "versionName":  "0.26.1",
+                                      "file":  "hongguotv-0.26.1-hw-phone-debug.apk",
+                                      "size":  10338402,
+                                      "sha256":  "e9f5b67b61403371aefcdb5c5d03b415ad076b319faa7a2572aa6f75f386e8b5"
+                                  },
+                     "a5":  {
+                                "versionCode":  37,
+                                "versionName":  "0.22.7",
+                                "file":  "hongguotv-0.22.7-android5-debug.apk",
+                                "size":  10872040,
+                                "sha256":  "4355c4105288255e46f71e6e17e01004d2a8adf429ee96073e17a09bef8c5a52"
+                            }
+                 }
+}

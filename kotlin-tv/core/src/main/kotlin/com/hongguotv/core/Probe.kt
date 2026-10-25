@@ -2,6 +2,19 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    args.firstOrNull { it.startsWith("--theater=") }?.substringAfter("=")?.let { raw ->
+        val type=ContentType.entries.firstOrNull { it.storedValue==raw.lowercase() } ?: ContentType.SHORT
+        val genres=runCatching { repository.genres(type) }
+        println("genres=${genres.getOrNull()?.size} err=${genres.exceptionOrNull()?.message}")
+        val genre=genres.getOrNull()?.firstOrNull()
+        if(genre!=null) {
+            val page=runCatching { repository.home(1,type,genre) }
+            println("theater genre=${genre.name} items=${page.getOrNull()?.items?.size} hasMore=${page.getOrNull()?.hasMore} err=${page.exceptionOrNull()?.message}")
+        }
+        val all=runCatching { repository.home(1,type) }
+        println("theater-all items=${all.getOrNull()?.items?.size} err=${all.exceptionOrNull()?.message}")
+        return
+    }
     if(args.contains("--register")) {
         val ok=repository.registerDeviceIfNeeded()
         val snap=repository.deviceSnapshot()

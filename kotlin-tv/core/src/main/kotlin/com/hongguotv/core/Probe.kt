@@ -15,6 +15,32 @@ fun main(args: Array<String>) {
         println("theater-all items=${all.getOrNull()?.items?.size} err=${all.exceptionOrNull()?.message}")
         return
     }
+    if(args.contains("--selfcheck")) {
+        var pass=0; var fail=0
+        fun check(name: String, body: () -> String) {
+            val result=runCatching(body)
+            val value=result.getOrNull()
+            if(value!=null) { pass++; println("PASS  " + name + "  ->  " + value) }
+            else { fail++; println("FAIL  " + name + "  ->  " + (result.exceptionOrNull()?.message ?: "unknown")) }
+        }
+        var seriesId=""
+        var episodeId=""
+        check("home-short") { val p=repository.home(1,ContentType.SHORT); seriesId=p.items.firstOrNull()?.id.orEmpty(); p.items.size.toString()+" 条" }
+        check("home-comic") { val p=repository.home(1,ContentType.COMIC); p.items.size.toString()+" 条" }
+        check("rank-comic-p1") { val p=repository.ranking(RankBoard.COMIC,1); p.items.size.toString()+" 条 / 名次 "+(p.ranking?.positions?.size ?: 0) }
+        check("rank-comic-p2") { val p=repository.ranking(RankBoard.COMIC,2); p.items.size.toString()+" 条" }
+        check("rank-real-p1") { val p=repository.ranking(RankBoard.REAL,1); p.items.size.toString()+" 条" }
+        check("theater-genres") { repository.genres(ContentType.SHORT).size.toString()+" 个题材" }
+        check("theater-genre-p1") { val g=repository.genres(ContentType.SHORT).first(); val p=repository.home(1,ContentType.SHORT,g); p.items.size.toString()+" 条" }
+        check("theater-genre-p2") { val g=repository.genres(ContentType.SHORT).first(); val p=repository.home(2,ContentType.SHORT,g); p.items.size.toString()+" 条 hasMore="+p.hasMore }
+        check("search-merged") { val p=repository.searchMerged("总裁",1); p.items.size.toString()+" 条" }
+        check("search-suggest") { val s=repository.suggest("zcf"); s.size.toString()+" 条 "+s.take(2) }
+        check("detail") { val d=repository.detail(seriesId); episodeId=d.episodes.firstOrNull().orEmpty(); d.series.title+" / "+d.episodes.size+" 集" }
+        check("stream-720") { val v=repository.stream(episodeId,720); v.quality+" "+v.codec }
+        check("danmaku") { val w=DanmakuRepository(repository.http).window(seriesId,episodeId,90_000,0); w.comments.size.toString()+" 条" }
+        println("SUMMARY pass="+pass+" fail="+fail)
+        return
+    }
     if(args.contains("--register")) {
         val ok=repository.registerDeviceIfNeeded()
         val snap=repository.deviceSnapshot()

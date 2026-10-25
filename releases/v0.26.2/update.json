@@ -1,0 +1,35 @@
+{
+    "versionCode":  38,
+    "versionName":  "0.26.2",
+    "notes":  "稳定性修复：站点会偶发把 keep-alive 连接挂住，导致榜单/剧场页面超时（实测短剧榜第 1 页超时、同页稍后正常）。重试改为「第二次起换新连接（Connection: close）」并加大退避，榜单页最多重试 7 次。新增 --selfcheck 自检覆盖 13 条数据源。",
+    "variants":  {
+                     "sw-tv":  {
+                                   "versionCode":  38,
+                                   "versionName":  "0.26.2",
+                                   "file":  "hongguotv-0.26.2-sw-tv-debug.apk",
+                                   "size":  25449091,
+                                   "sha256":  "8a79613c555ee129f09af4f85b3b9f7a62d990e81b6a9a23daf6eb7672f4d5bc"
+                               },
+                     "sw-a7":  {
+                                   "versionCode":  38,
+                                   "versionName":  "0.26.2",
+                                   "file":  "hongguotv-0.26.2-sw-a7-debug.apk",
+                                   "size":  26333827,
+                                   "sha256":  "8a0797f641f6a5661e2adecb8050e667b8a553249917020f975394d4d39492f2"
+                               },
+                     "hw-phone":  {
+                                      "versionCode":  38,
+                                      "versionName":  "0.26.2",
+                                      "file":  "hongguotv-0.26.2-hw-phone-debug.apk",
+                                      "size":  10342198,
+                                      "sha256":  "c481fa0b2ec7ec6249c8ba4272bd6f6da5a34b823d8ad4bd58a994edf4154e10"
+                                  },
+                     "a5":  {
+                                "versionCode":  39,
+                                "versionName":  "0.22.8",
+                                "file":  "hongguotv-0.22.8-android5-debug.apk",
+                                "size":  10875757,
+                                "sha256":  "28f985703fef1c029aed23ff6079c59b883b847592720375f9fc9c43ef0ae781"
+                            }
+                 }
+}

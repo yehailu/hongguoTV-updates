@@ -57,13 +57,20 @@ class DanmakuRepository(
 
     private fun fetchWithRetry(seriesId: String, vid: String, durationMs: Long, startMs: Long, cursor: String): Page {
         var attempt = 0
+        var hostIndex = 0
         while (true) {
             try {
-                return parse(post(vid, body(seriesId, vid, durationMs, startMs, cursor)), startMs)
+                val raw = post(COMMENT_HOSTS[hostIndex % COMMENT_HOSTS.size], vid, body(seriesId, vid, durationMs, startMs, cursor))
+                // 平台对部分线路会回 200 + 空体（约一半概率），换线重发即可；同一条线重试没用。
+                if (raw.isBlank() && hostIndex < COMMENT_HOSTS.size - 1) { hostIndex++; continue }
+                return parse(raw, startMs)
             } catch (cooldown: Cooldown) {
                 if (attempt >= MAX_COOLDOWN_RETRIES) throw IOException("弹幕接口风控中，请稍后再试")
                 attempt++
                 sleep(cooldown.ms + (random() * 1000).toLong())
+            } catch (problem: IOException) {
+                if (hostIndex >= COMMENT_HOSTS.size - 1) throw problem
+                hostIndex++
             }
         }
     }
@@ -98,10 +105,10 @@ class DanmakuRepository(
         lastRequestAt = clock()
     }
 
-    private fun post(vid: String, body: ByteArray): String {
+    private fun post(host: String, vid: String, body: ByteArray): String {
         throttle()
         VendorConstants.regenerate()
-        val signed = signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/novel/commentapi/comment/list/$vid/v1/", VendorConstants.device, body)
+        val signed = signer.sign("https://$host/novel/commentapi/comment/list/$vid/v1/", VendorConstants.device, body)
         val request = Request.Builder().url(signed.url)
             .header("User-Agent", VendorConstants.VIDEO_UA)
             .header("comment-source", "601")
@@ -153,6 +160,15 @@ class DanmakuRepository(
     }
 
     companion object {
+        /** 弹幕接口的多条线路：单条回空响应是常态，轮一圈基本必中。 */
+        private val COMMENT_HOSTS = listOf(
+            "api5-normal-sinfonlinea.fqnovel.com",
+            "api5-normal-sinfonlinec.fqnovel.com",
+            "api5-normal-sinfonlineb.fqnovel.com",
+            "api5-normal-lf.fqnovel.com",
+            "api5-normal-lq.fqnovel.com",
+            "api5-normal-hl.fqnovel.com"
+        )
         const val WINDOW_MS = 30_000L
         private const val MAX_PAGES_PER_WINDOW = 3
         private const val MAX_COOLDOWN_RETRIES = 2

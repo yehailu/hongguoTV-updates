@@ -1,35 +1,35 @@
 {
     "versionCode":  38,
     "versionName":  "0.26.2",
-    "notes":  "稳定性修复：站点会偶发把 keep-alive 连接挂住，导致榜单/剧场页面超时（实测短剧榜第 1 页超时、同页稍后正常）。重试改为「第二次起换新连接（Connection: close）」并加大退避，榜单页最多重试 7 次。新增 --selfcheck 自检覆盖 13 条数据源。",
+    "notes":  "参照 HGTV 补齐两处：弹幕改 6 条线路轮询（单线回空是常态）；详情页相关推荐改走 App 接口 plan/v:version（带同 IP/各季，失败或不足 3 条时回退官网解析）。另含重试换新连接、榜单 7 次重试与 14 项数据源自检。",
     "variants":  {
                      "sw-tv":  {
                                    "versionCode":  38,
                                    "versionName":  "0.26.2",
                                    "file":  "hongguotv-0.26.2-sw-tv-debug.apk",
                                    "size":  25449091,
-                                   "sha256":  "8a79613c555ee129f09af4f85b3b9f7a62d990e81b6a9a23daf6eb7672f4d5bc"
+                                   "sha256":  "7c141e8e133d92b8cc94aa7b06cdf42f251e84c61e3bcdf40875d32a20709170"
                                },
                      "sw-a7":  {
                                    "versionCode":  38,
                                    "versionName":  "0.26.2",
                                    "file":  "hongguotv-0.26.2-sw-a7-debug.apk",
                                    "size":  26333827,
-                                   "sha256":  "8a0797f641f6a5661e2adecb8050e667b8a553249917020f975394d4d39492f2"
+                                   "sha256":  "95901063c13f8c5a576f5929c73d7fda454d6840b24186b61cc44fe830821cb0"
                                },
                      "hw-phone":  {
                                       "versionCode":  38,
                                       "versionName":  "0.26.2",
                                       "file":  "hongguotv-0.26.2-hw-phone-debug.apk",
-                                      "size":  10342198,
-                                      "sha256":  "c481fa0b2ec7ec6249c8ba4272bd6f6da5a34b823d8ad4bd58a994edf4154e10"
+                                      "size":  10532132,
+                                      "sha256":  "6b860182fe12fe3154eb5304a3acb438fe5ef4a2d8a551364acc7392e908f42d"
                                   },
                      "a5":  {
                                 "versionCode":  39,
                                 "versionName":  "0.22.8",
                                 "file":  "hongguotv-0.22.8-android5-debug.apk",
-                                "size":  10875757,
-                                "sha256":  "28f985703fef1c029aed23ff6079c59b883b847592720375f9fc9c43ef0ae781"
+                                "size":  11066078,
+                                "sha256":  "fe51df809c88cc5dc9bae69f8013359fa85febda7342643a12c2f1c7844c3c89"
                             }
                  }
 }

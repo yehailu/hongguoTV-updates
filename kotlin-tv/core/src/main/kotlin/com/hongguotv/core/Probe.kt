@@ -36,6 +36,7 @@ fun main(args: Array<String>) {
         check("search-merged") { val p=repository.searchMerged("总裁",1); p.items.size.toString()+" 条" }
         check("search-suggest") { val s=repository.suggest("zcf"); s.size.toString()+" 条 "+s.take(2) }
         check("detail") { val d=repository.detail(seriesId); episodeId=d.episodes.firstOrNull().orEmpty(); d.series.title+" / "+d.episodes.size+" 集" }
+        check("related") { val t=repository.detail(seriesId).series.title; val n=repository.relatedWorks(seriesId,t).size; n.toString()+" 条" }
         check("stream-720") { val v=repository.stream(episodeId,720); v.quality+" "+v.codec }
         check("danmaku") { val w=DanmakuRepository(repository.http).window(seriesId,episodeId,90_000,0); w.comments.size.toString()+" 条" }
         println("SUMMARY pass="+pass+" fail="+fail)

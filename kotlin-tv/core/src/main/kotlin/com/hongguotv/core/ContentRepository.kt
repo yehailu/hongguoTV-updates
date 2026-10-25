@@ -97,6 +97,18 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private fun cookieHeader(): String? =
         registrationCookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }.takeIf { it.isNotBlank() }
 
+    /** 站点页面与官网 JSON 会偶发「200 + 0 字节」或超时；短退避重试几次再放弃。 */
+    private fun textRetry(url: String, signed: Signer.Request? = null, attempts: Int = 4): String {
+        var last: IOException? = null
+        for (attempt in 1..attempts) {
+            try { return text(url, signed) }
+            catch (problem: IOException) {
+                last = problem
+                if (attempt < attempts) runCatching { Thread.sleep(300L * attempt) }
+            }
+        }
+        throw last ?: IOException("内容请求失败")
+    }
     private fun text(url: String, signed: Signer.Request? = null): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
@@ -113,7 +125,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             String(bytes,Charsets.UTF_8)
         }
     }
-    private fun router(url: String) = extractRouter(text(url)).getJSONObject("loaderData")
+    private fun router(url: String) = extractRouter(textRetry(url)).getJSONObject("loaderData")
     private fun card(item: JSONObject): Series {
         val o=item.optJSONObject("video_data") ?: item
         val count=o.optInt("episode_cnt",o.optJSONObject("series_episode_info")?.optInt("episode_cnt",0) ?: 0)
@@ -123,7 +135,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private fun valid(rows: List<Series>) = rows.filter { it.id.matches(Regex("[0-9]{1,30}")) && it.title.isNotBlank() }.distinctBy { it.id }
     fun ranking(board: RankBoard, page: Int = 1): CatalogPage {
         require(page in 1..100)
-        return ComicRank.parse(text("$site/rank/${board.path}?page=$page"),page,board)
+        return ComicRank.parse(textRetry("$site/rank/${board.path}?page=$page"),page,board)
     }
     fun comicRanking(page: Int = 1)=ranking(RankBoard.COMIC,page)
     fun realRanking(page: Int = 1)=ranking(RankBoard.REAL,page)
@@ -146,7 +158,8 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     fun home(page: Int = 1, type: ContentType = ContentType.SHORT, genre: Genre? = null): CatalogPage {
         require(page in 1..100)
         if(genre!=null) return categoryListing("$site/category/${categoryPath(type)}/${genre.slug}"+if(page>1) "?page=$page" else "",page,"题材",genre)
-        if(type==ContentType.COMIC) return comicRanking(page)
+        // 漫剧首页读的是榜单页，榜单偶发超时：退到同类型的分类目录，至少让首页有内容。
+        if(type==ContentType.COMIC) return runCatching { comicRanking(page) }.getOrElse { categoryListing("$site/category/comic-drama",page,"热门") }
         return categoryListing("$site/category?tab=1&sort_type=1"+if(page>1) "&page=$page" else "",page,"首页")
     }
     private fun categoryListing(url: String,page: Int,label: String,genre: Genre? = null): CatalogPage {
@@ -203,7 +216,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
      * rows (video_data.series_id / series_title / series_cover / genre).
      */
     private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
-        val data=JSONObject(text("$site/api/search/result/?query=${Signer.encode(keyword)}&page=$page"))
+        val data=JSONObject(textRetry("$site/api/search/result/?query=${Signer.encode(keyword)}&page=$page"))
         val rows=data.optJSONArray("searchList") ?: throw IOException("搜索数据暂不可用")
         val mapped=rows.objects().let { list -> if(genre==null) list else list.filter { (it.optJSONObject("video_data") ?: it).optString("genre")==genre } }.map(::card)
         val items=valid(mapped)
@@ -271,7 +284,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     fun detail(id: String): Detail {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val html=text("$site/detail?series_id=$id")
+        val html=textRetry("$site/detail?series_id=$id")
         val loader=extractRouter(html).getJSONObject("loaderData")
         val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
         val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
@@ -319,18 +332,13 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private fun loadVariants(id: String): StreamVariants {
         require(id.matches(Regex("[0-9]{1,30}")))
         registerDeviceIfNeeded()
-        VendorConstants.regenerate()
-        val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
-        val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/",VendorConstants.device,payload)
-        val data=JSONObject(text(signed.url,signed))
-        if(data.optInt("Code",data.optInt("code",0))!=0) throw IOException("播放接口暂不可用")
-        val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
-        val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
-        val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
+        val biz="""{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024}"""
+        val videoMap="""{"biz_param":$biz,"mixed_video_id_map":{"1004":["$id"]}}"""
+        val model=videoModel(id,biz,videoMap)
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
-        val info=JSONObject(text(fallback)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
+        val info=JSONObject(textRetry(fallback)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
         val videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
         // ByteVC2 resources can expose playable audio but no video track in Android's MP4 extractor.
         // Keep missing legacy codec labels usable, but never select a known incompatible variant.
@@ -342,6 +350,46 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             VideoVariant(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { key } } } }),key,o,codec)
         }.sortedByDescending { it.height }.toList()
         return StreamVariants(info,rows)
+    }
+    /**
+     * 平台 2026-10-14 改过播放接口：带场景段的 `multi_video_model/:dr_scene/v1/` 回「200 + 空体」，
+     * 旧的 `multi_video_model/v1/` 回 `110001`，目前可用的是 `player/video_model/v1/`（请求体是
+     * `video_id` 单值）。按「新路由 → 带场景段 → 旧路径」依次试，空响应先原地重试再换下一条。
+     */
+    private fun videoModel(id: String,biz: String,videoMap: String): JSONObject {
+        val candidates=listOf(
+            "/novel/player/video_model/v1/" to """{"video_id":"$id","biz_param":$biz}""",
+            "/novel/player/multi_video_model/preload/v1/" to videoMap,
+            "/novel/player/multi_video_model/default/v1/" to videoMap,
+            "/novel/player/multi_video_model/detail/v1/" to videoMap,
+            "/novel/player/multi_video_model/v1/" to videoMap
+        )
+        var failure: IOException?=null
+        for ((path,body) in candidates) {
+            val attempt=runCatching {
+                var response=""
+                var blank=0
+                while(true) {
+                    VendorConstants.regenerate()
+                    val payload=body.toByteArray()
+                    val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com$path",VendorConstants.device,payload)
+                    response=runCatching { text(signed.url,signed) }.getOrElse { "" }
+                    // 网关拦截时是 200 + 0 字节：必须先判空，否则业务码默认 0 会被当成成功。
+                    if(response.isNotBlank() || blank>=2) break
+                    blank++
+                    Thread.sleep(250L+blank*250L)
+                }
+                if(response.isBlank()) throw IOException("播放接口暂不可用（空响应）")
+                val data=JSONObject(response)
+                if(data.optInt("Code",data.optInt("code",0))!=0) throw IOException("播放接口暂不可用（${data.optInt("code",data.optInt("Code"))}）")
+                val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
+                val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
+                entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
+            }
+            attempt.getOrNull()?.let { return it }
+            (attempt.exceptionOrNull() as? IOException)?.let { failure=it }
+        }
+        throw failure ?: IOException("播放接口暂不可用")
     }
     /** Diagnostics: every variant the API returns, ignoring device limits (used by the probe). */
     internal fun variantReport(id: String): List<String> = loadVariants(id).rows.map { "${it.height}P/${it.codec}" }

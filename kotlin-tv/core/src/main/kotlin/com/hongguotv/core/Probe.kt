@@ -2,6 +2,12 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    if(args.contains("--register")) {
+        val ok=repository.registerDeviceIfNeeded()
+        val snap=repository.deviceSnapshot()
+        println("registered=$ok device=${snap.first} iid=${snap.second} cookies=${snap.third.keys}")
+        return
+    }
     args.firstOrNull { it.startsWith("--search=") }?.substringAfter("=")?.let { keyword ->
         for(type in ContentType.entries) {
             val page=runCatching { repository.search(keyword,1,type) }

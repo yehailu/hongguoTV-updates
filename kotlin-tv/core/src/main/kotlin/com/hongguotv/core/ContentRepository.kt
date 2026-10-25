@@ -55,9 +55,52 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
     private val genreCache=mutableMapOf<ContentType,Pair<Long,List<Genre>>>()
     private fun categoryPath(type: ContentType)=if(type==ContentType.COMIC) "comic-drama" else "real-drama"
+    @Volatile private var registrationCookies: Map<String,String> = emptyMap()
+    @Volatile private var registerInFlight = false
+
+    /** 平台要求「注册过的设备」才给数据；这里做一次性匿名注册，失败也不阻断回退路径。 */
+    fun registerDeviceIfNeeded(): Boolean {
+        if(VendorConstants.registered) return true
+        synchronized(this) {
+            if(VendorConstants.registered) return true
+            if(registerInFlight) return false
+            registerInFlight = true
+        }
+        return try { registerDevice() } finally { registerInFlight = false }
+    }
+    private fun registerDevice(): Boolean {
+        val profile=VendorConstants.device
+        val body=DeviceRegister.payload(profile)
+        val headers=DeviceRegister.headers(body,profile)
+        val registered=runCatching {
+            val builder=Request.Builder().url(DeviceRegister.url())
+            headers.forEach { (key,value) -> builder.header(key,value) }
+            builder.post(body.toRequestBody("application/octet-stream;tt-data=a".toMediaType()))
+            RequestScope.execute(http.newCall(builder.build())) { response ->
+                if(!response.isSuccessful) throw IOException("设备注册失败（HTTP ${response.code}）")
+                val bytes=response.body?.bytes() ?: throw IOException("设备注册响应为空")
+                DeviceRegister.parse(String(bytes,Charsets.UTF_8),response.headers("Set-Cookie"))
+            }
+        }.getOrNull() ?: return false
+        VendorConstants.adopt(registered.deviceId,registered.installId)
+        registrationCookies=registered.cookies
+        return true
+    }
+    /** 启动时把上次注册的身份与 Cookie 放回来，避免每次冷启动都重新注册。 */
+    fun restoreDevice(deviceId: String, installId: String, cookies: Map<String,String>) {
+        if(deviceId.isBlank() || installId.isBlank()) return
+        VendorConstants.adopt(deviceId,installId)
+        registrationCookies=cookies
+    }
+    fun deviceSnapshot(): Triple<String,String,Map<String,String>> =
+        Triple(VendorConstants.installDeviceId,VendorConstants.installIid,registrationCookies)
+    private fun cookieHeader(): String? =
+        registrationCookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }.takeIf { it.isNotBlank() }
+
     private fun text(url: String, signed: Signer.Request? = null): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
+        if(signed!=null) cookieHeader()?.let { request.header("Cookie",it) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
         return RequestScope.execute(http.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw IOException("内容请求失败（HTTP ${response.code}）")
@@ -136,8 +179,14 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
      */
     fun searchMerged(keyword: String, page: Int = 1): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
-        val short=runCatching { search(keyword,page,ContentType.SHORT) }.getOrNull()
-        val comic=runCatching { search(keyword,page,ContentType.COMIC) }.getOrNull()
+        var short=runCatching { search(keyword,page,ContentType.SHORT) }.getOrNull()
+        var comic=runCatching { search(keyword,page,ContentType.COMIC) }.getOrNull()
+        if(short==null && comic==null) {
+            // 站点/接口偶发超时：稍等再试一轮，仍然全空才报错。
+            runCatching { Thread.sleep(300) }
+            short=runCatching { search(keyword,page,ContentType.SHORT) }.getOrNull()
+            comic=runCatching { search(keyword,page,ContentType.COMIC) }.getOrNull()
+        }
         if(short==null && comic==null) throw IOException("搜索暂不可用")
         val first=Seasons.collapse(short?.items.orEmpty())
         val second=Seasons.collapse(comic?.items.orEmpty())
@@ -163,6 +212,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         return CatalogPage(items,hasMore && page<lastPage)
     }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
+        registerDeviceIfNeeded()
         VendorConstants.regenerate()
         val values=VendorConstants.device.toMutableMap()
         for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
@@ -268,6 +318,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private class StreamVariants(val info: JSONObject,val rows: List<VideoVariant>)
     private fun loadVariants(id: String): StreamVariants {
         require(id.matches(Regex("[0-9]{1,30}")))
+        registerDeviceIfNeeded()
         VendorConstants.regenerate()
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
         val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/",VendorConstants.device,payload)

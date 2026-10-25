@@ -14,7 +14,18 @@ internal object VendorConstants {
     var installDeviceId: String = randomInstallId()
     var processNonce: String = randomNonce()
     var processStarted: Long = System.currentTimeMillis()
-    fun regenerate() { installIid = randomInstallId(); installDeviceId = randomInstallId(); processNonce = randomNonce(); processStarted = System.currentTimeMillis() }
+    /** 已拿到服务端注册身份后，身份不能再随机化，否则签名与 Cookie 对不上。 */
+    var registered: Boolean = false
+        private set
+    fun regenerate() {
+        if(!registered) { installIid = randomInstallId(); installDeviceId = randomInstallId() }
+        processNonce = randomNonce(); processStarted = System.currentTimeMillis()
+    }
+    fun adopt(deviceId: String, installId: String) {
+        installDeviceId = deviceId
+        installIid = installId
+        registered = true
+    }
     private fun randomInstallId(): String = buildString(16) { append('1'); repeat(15) { append(Random.nextInt(10)) } }
     private fun randomNonce(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(Random.nextBytes(18))
     val device: Map<String, String>

@@ -207,6 +207,17 @@ class Library(context: Context) {
     var theme: String
         get() = prefs.getString("theme", null) ?: "NIGHT"
         set(value) { prefs.edit().putString("theme", value).apply() }
+    /** 平台要求「注册过的设备」才给数据；这三个值来自匿名注册，持久化后不必每次重启都注册。 */
+    var deviceId: String
+        get() = prefs.getString("deviceId", "").orEmpty()
+        set(value) { prefs.edit().putString("deviceId", value).apply() }
+    var deviceIid: String
+        get() = prefs.getString("deviceIid", "").orEmpty()
+        set(value) { prefs.edit().putString("deviceIid", value).apply() }
+    var deviceCookies: String
+        get() = prefs.getString("deviceCookies", "").orEmpty()
+        set(value) { prefs.edit().putString("deviceCookies", value).apply() }
+
     /** Background update check, at most once per day. */
     var autoUpdate: Boolean
         get() = prefs.getBoolean("autoUpdate", true)

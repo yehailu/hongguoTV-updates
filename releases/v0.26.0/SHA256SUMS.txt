@@ -1,0 +1,4 @@
+b5419af42eacd9a1cd026a4b2fb811e1f436a15cf3b78fb31317160352ed86b6  hongguotv-0.22.6-android5-debug.apk
+4f6c02c39cc2e1f12a8d4fad381e0dd8cced9d5109beb110fb4dcf8a195acc6d  hongguotv-0.26.0-hw-phone-debug.apk
+b34925948c4acad191aed400673b36ccb730a385e0d0dffe8c37b1d6db650f6e  hongguotv-0.26.0-sw-a7-debug.apk
+8c20a37c3f59443cbbd28271ca2e760869b3ca3db2529fae5ea94b095e32692b  hongguotv-0.26.0-sw-tv-debug.apk

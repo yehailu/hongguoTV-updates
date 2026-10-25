@@ -316,8 +316,31 @@ class MainActivity: Activity() {
     private fun showLibraryError(problem: Throwable) {
         val body=base(); error(body,problem) { message(base(),"正在读取本机记录…"); loadLibrary() }
     }
+    private fun cookieMap(raw: String): Map<String,String> =
+        raw.split(';').mapNotNull { part ->
+            val name=part.substringBefore('=',"").trim()
+            val value=part.substringAfter('=',"").trim()
+            if(name.isEmpty() || value.isEmpty()) null else name to value
+        }.toMap()
+
+    /** 平台按「注册过的设备」放行 App 接口：启动恢复身份，没有就后台注册一次并回写。 */
+    private fun restoreOrRegisterDevice() {
+        repository.restoreDevice(library.deviceId,library.deviceIid,cookieMap(library.deviceCookies))
+        io.execute {
+            repository.registerDeviceIfNeeded()
+            syncDeviceIdentity()
+        }
+    }
+    private fun syncDeviceIdentity() {
+        val (deviceId,installId,cookies)=repository.deviceSnapshot()
+        if(deviceId.isBlank() || installId.isBlank()) return
+        if(deviceId==library.deviceId && installId==library.deviceIid) return
+        library.deviceId=deviceId; library.deviceIid=installId
+        library.deviceCookies=cookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }
+    }
     private fun loadLibrary() {
         libraryLoadError=null
+        restoreOrRegisterDevice()
         library.loadAsync(onFailure={ problem ->
             if(!isDestroyed) { libraryLoadError=problem; if(foreground) showLibraryError(problem) }
         }) {

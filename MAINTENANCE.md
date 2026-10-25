@@ -4,10 +4,10 @@
 
 | # | 包（当前版本） | 变体 ID | 适用 | 解码 | minSdk | 方向 |
 |---|---|---|---|---|---|---|
-| 1 | `hongguotv-0.25.0-sw-tv-debug.apk` | `sw-tv` | 电视 / 车机（含无 HEVC 解码器设备） | 硬解优先 + FFmpeg 软解 | 27（8.1） | 横屏 |
-| 2 | `hongguotv-0.25.0-sw-a7-debug.apk` | `sw-a7` | Android 7 的电视 / 车机 | 同上 | 24（7.0） | 横屏 |
-| 3 | `hongguotv-0.25.0-hw-phone-debug.apk` | `hw-phone` | 手机 / 平板 | 仅硬解（无 FFmpeg） | 26（8.0） | 可横竖屏 |
-| 4 | `hongguotv-0.22.4-android5-debug.apk` | `a5` | Android 5.0–6.0 老设备 | 仅硬解 | 21（5.0） | 横屏 |
+| 1 | `hongguotv-0.26.0-sw-tv-debug.apk` | `sw-tv` | 电视 / 车机（含无 HEVC 解码器设备） | 硬解优先 + FFmpeg 软解 | 27（8.1） | 横屏 |
+| 2 | `hongguotv-0.26.0-sw-a7-debug.apk` | `sw-a7` | Android 7 的电视 / 车机 | 同上 | 24（7.0） | 横屏 |
+| 3 | `hongguotv-0.26.0-hw-phone-debug.apk` | `hw-phone` | 手机 / 平板 | 仅硬解（无 FFmpeg） | 26（8.0） | 可横竖屏 |
+| 4 | `hongguotv-0.22.6-android5-debug.apk` | `a5` | Android 5.0–6.0 老设备 | 仅硬解 | 21（5.0） | 横屏 |
 
 四个包同包名 `com.hongguotv.nativeapp`，**互相覆盖安装**。
 
@@ -25,11 +25,11 @@
 ## 一键发版
 
 ```powershell
-# 主线 0.25.1 / code 33，安卓5 支线 0.22.5 / code 34
-.\tools\release.ps1 -MainVersion 0.25.1 -MainCode 33 -A5Version 0.22.5 -A5Code 34
+# 主线 0.26.0 / code 34，安卓5 支线 0.22.6 / code 35
+.\tools\release.ps1 -MainVersion 0.26.0 -MainCode 34 -A5Version 0.22.6 -A5Code 35
 
 # 只发主线（安卓5 不动）
-.\tools\release.ps1 -MainVersion 0.25.1 -MainCode 33 -SkipLegacy
+.\tools\release.ps1 -MainVersion 0.26.0 -MainCode 34 -SkipLegacy
 ```
 
 脚本会：编译 4 个包 → 复制到 `releases\v<版本>\` → 生成 `update.json`（不含 BOM，含各变体 sha256/size）

@@ -98,19 +98,22 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         registrationCookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }.takeIf { it.isNotBlank() }
 
     /** 站点页面与官网 JSON 会偶发「200 + 0 字节」或超时；短退避重试几次再放弃。 */
-    private fun textRetry(url: String, signed: Signer.Request? = null, attempts: Int = 4): String {
+    private fun textRetry(url: String, signed: Signer.Request? = null, attempts: Int = 5): String {
         var last: IOException? = null
         for (attempt in 1..attempts) {
-            try { return text(url, signed) }
-            catch (problem: IOException) {
+            try {
+                // 第二次起换一条新连接：站点偶发把 keep-alive 连接挂住，重发到同一条连接上只会继续超时。
+                return text(url, signed, freshConnection = attempt > 1)
+            } catch (problem: IOException) {
                 last = problem
-                if (attempt < attempts) runCatching { Thread.sleep(300L * attempt) }
+                if (attempt < attempts) runCatching { Thread.sleep(400L * attempt + (0..200).random()) }
             }
         }
         throw last ?: IOException("内容请求失败")
     }
-    private fun text(url: String, signed: Signer.Request? = null): String {
+    private fun text(url: String, signed: Signer.Request? = null, freshConnection: Boolean = false): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
+        if (freshConnection) { request.header("Connection","close"); request.header("Cache-Control","no-cache") }
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
         if(signed!=null) cookieHeader()?.let { request.header("Cookie",it) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
@@ -135,7 +138,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private fun valid(rows: List<Series>) = rows.filter { it.id.matches(Regex("[0-9]{1,30}")) && it.title.isNotBlank() }.distinctBy { it.id }
     fun ranking(board: RankBoard, page: Int = 1): CatalogPage {
         require(page in 1..100)
-        return ComicRank.parse(textRetry("$site/rank/${board.path}?page=$page"),page,board)
+        return ComicRank.parse(textRetry("$site/rank/${board.path}?page=$page",attempts=7),page,board)
     }
     fun comicRanking(page: Int = 1)=ranking(RankBoard.COMIC,page)
     fun realRanking(page: Int = 1)=ranking(RankBoard.REAL,page)

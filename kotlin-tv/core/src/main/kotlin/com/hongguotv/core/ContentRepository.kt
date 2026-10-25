@@ -294,7 +294,10 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val episodes=(0 until raw.length()).map { raw.getString(it) }
         if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
         val series=card(o).copy(id=id)
-        return Detail(series,episodes,related(html,series),sameName(series))
+        // 详情页下方「相关作品」：App 接口给得更全（含同 IP、各季），失败再退回官网详情页那一栏。
+        val appRelated=runCatching { relatedWorks(id,series.title) }.getOrDefault(emptyList())
+        // App 接口偶尔只回 1~2 条（线路半通），少于 3 条时仍用官网详情页那一栏，避免推荐栏突然变空。
+        return Detail(series,episodes,if(appRelated.size>=3) appRelated else related(html,series),sameName(series))
     }
     // The detail page has no dedicated same-name group, so other seasons are collected by searching the
     // website for the season-independent base title and keeping every entry that shares that base name.
@@ -394,6 +397,66 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         }
         throw failure ?: IOException("播放接口暂不可用")
     }
+    /**
+     * 「相关作品」：App 详情页下方那一栏（`show_type=547`），一次请求拿全。
+     * 接口对部分线路回空响应是常态，六条线路轮询、最多试 8 次。
+     */
+    fun relatedWorks(id: String, title: String): List<Series> {
+        require(id.matches(Regex("[0-9]{1,30}")))
+        val rows=relatedRows(id)
+        if(rows.isEmpty()) return emptyList()
+        val current=baseName(title)
+        val seasons=rows.filter { it.id!=id && (current.isBlank() || baseName(it.title)==current) }
+            .sortedBy { seasonNumber(it.title) }
+        val seasonIds=seasons.map { it.id }.toSet()
+        return (seasons+rows.filter { it.id!=id && it.id !in seasonIds }).distinctBy { it.id }
+    }
+    private fun relatedRows(id: String): List<Series> {
+        var failure: IOException?=null
+        for(attempt in 0 until RELATED_ATTEMPTS) {
+            val host=RELATED_HOSTS[attempt % RELATED_HOSTS.size]
+            val values=VendorConstants.device.toMutableMap()
+            values.putAll(linkedMapOf(
+                "scene" to "10","from" to "detail_page_more_related","book_id" to id,
+                "new_search_middle_page" to "false","bookstore_tab_type" to "0","query_history_removed" to "false",
+                "user_is_login" to "0","bookstore_tab" to "0","search_middle_page_version" to "0",
+                "pad_column_detail" to "0","hot_word_exchange" to "false","device_level" to "3",
+                "limit" to "0","offset" to "0","is_horizontal_screen" to "false",
+                "reader_single_col_from_ip_strategy" to "false"
+            ))
+            val result=runCatching {
+                val signed=signer.sign("https://$host/reading/bookapi/plan/v:version/",values)
+                val raw=text(signed.url,signed)
+                if(raw.isBlank()) throw IOException("相关作品接口暂无响应")
+                val data=JSONObject(raw)
+                if(data.optInt("code",-1)!=0) throw IOException("相关作品接口暂不可用（${data.optInt("code")}）")
+                parseRelatedCells(data)
+            }
+            val rows=result.getOrNull().orEmpty()
+            if(rows.isNotEmpty()) return rows
+            failure=result.exceptionOrNull() as? IOException
+        }
+        throw failure ?: IOException("相关作品接口暂不可用")
+    }
+    private fun parseRelatedCells(data: JSONObject): List<Series> {
+        val cells=data.optJSONArray("data") ?: return emptyList()
+        val out=linkedMapOf<String,Series>()
+        cells.objects().forEach { cell ->
+            val isRelated=cell.optInt("show_type")==RELATED_CELL_SHOW_TYPE || cell.optString("cell_name")=="相关作品"
+            if(isRelated) {
+                (cell.optJSONArray("video_data") ?: JSONArray()).objects().forEach { v ->
+                    val seriesId=v.optString("series_id")
+                    val name=v.optString("title")
+                    if(seriesId.matches(Regex("[0-9]{1,30}")) && name.isNotBlank()) {
+                        val count=v.optInt("episode_cnt")
+                        out.putIfAbsent(seriesId,Series(seriesId,name,cleanUrl(v.optString("cover")),v.optString("video_desc"),
+                            if(count>0) "全 $count 集" else "",""))
+                    }
+                }
+            }
+        }
+        return out.values.toList()
+    }
     /** Diagnostics: every variant the API returns, ignoring device limits (used by the probe). */
     internal fun variantReport(id: String): List<String> = loadVariants(id).rows.map { "${it.height}P/${it.codec}" }
     fun stream(id: String, maxQuality: Int = 1080, supportedCodecs: Set<String> = emptySet()): StreamInfo {
@@ -415,6 +478,12 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         // 网站搜索混合两类内容：video_data.genre 205 是漫剧，203 是短剧
         // （2026-10-13 用站点自带的漫剧热播榜与短剧分类列表逐条核对确认）。
         private const val COMIC_WEB_GENRE="205"
+        private const val RELATED_CELL_SHOW_TYPE=547
+        private const val RELATED_ATTEMPTS=8
+        private val RELATED_HOSTS=listOf(
+            "api5-normal-hl.fqnovel.com","api5-normal-lf.fqnovel.com","api5-normal-sinfonlinec.fqnovel.com",
+            "api5-normal-sinfonlinea.fqnovel.com","api5-normal-lq.fqnovel.com","api5-normal-sinfonlineb.fqnovel.com"
+        )
         private const val SHORT_WEB_GENRE="203"
         fun extractRouter(html: String): JSONObject {
             val marker=html.indexOf("_ROUTER_DATA"); if(marker<0) throw IOException("页面没有内容数据")

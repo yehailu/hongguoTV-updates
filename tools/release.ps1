@@ -19,7 +19,8 @@ param(
     [string]$Notes = "问题修复与稳定性改进。",
     [string]$OutDir,
     [switch]$SkipLegacy,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Publish
 )
 
 $ErrorActionPreference = "Stop"
@@ -129,6 +130,14 @@ Write-Host ""
 Write-Host "完成：$OutDir" -ForegroundColor Green
 Get-ChildItem $OutDir | ForEach-Object { Write-Host ("  " + $_.Name + "  " + [math]::Round($_.Length / 1MB, 1) + " MB") }
 Write-Host ""
+if ($Publish) {
+    Write-Host "== 直接发布（OpenAPI 上传附件并设为最新）" -ForegroundColor Cyan
+    python (Join-Path $Repo "tools\cnb_release_upload.py") --tag ("v" + $MainVersion) --dir $OutDir --title ("hongguo TV " + $MainVersion) --notes $Notes
+    if ($LASTEXITCODE -ne 0) { throw "发布失败" }
+    Write-Host "已发布并设为最新：v$MainVersion" -ForegroundColor Green
+    return
+}
+
 Write-Host "下一步：" -ForegroundColor Cyan
 Write-Host ("  1. 到 https://cnb.cool/lzyr9010/hongguoTV-updates/-/releases/new 建 tag v" + $MainVersion)
 Write-Host  "  2. 标题：hongguo TV $MainVersion"

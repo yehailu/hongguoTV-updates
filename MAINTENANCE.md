@@ -35,7 +35,14 @@
 脚本会：编译 4 个包 → 复制到 `releases\v<版本>\` → 生成 `update.json`（不含 BOM，含各变体 sha256/size）
 → 生成 `SHA256SUMS.txt` → 打印发布步骤。
 
-之后在 CNB 新建 `v<版本>` 的 Release，把 `releases\v<版本>\` 里的 6 个文件全部作为附件上传即可。
+一键出包并发布（附件上传走 CNB OpenAPI，PAT 取自 `.cnb-credentials`）：
+
+```
+.\tools\release.ps1 -MainVersion 0.26.4 -MainCode 42 -A5Version 0.22.10 -A5Code 43 -Publish
+```
+
+`-Publish` 会：Release 不存在则创建 → 逐个申请上传地址并 PUT → 确认 → 标记最新。
+也可单独用 `python tools/cnb_release_upload.py --tag v0.26.3 --dir releases/v0.26.3`。
 发布后确认 `/-/releases/latest` 已指向新 tag，客户端就能收到更新。
 
 > 注意：0.24.2 及更早的包没有更新器，需要手动安装一次 0.25.0 才会进入自动更新循环。

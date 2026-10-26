@@ -132,7 +132,10 @@ Get-ChildItem $OutDir | ForEach-Object { Write-Host ("  " + $_.Name + "  " + [ma
 Write-Host ""
 if ($Publish) {
     Write-Host "== 直接发布（OpenAPI 上传附件并设为最新）" -ForegroundColor Cyan
-    python (Join-Path $Repo "tools\cnb_release_upload.py") --tag ("v" + $MainVersion) --dir $OutDir --title ("hongguo TV " + $MainVersion) --notes $Notes
+    # PowerShell 里的 python 可能是 Windows Store 占位符，先用本机托管解释器
+    $Python = "$env:USERPROFILE\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+    if (-not (Test-Path $Python)) { $Python = "python" }
+    & $Python (Join-Path $Repo "tools\cnb_release_upload.py") --tag ("v" + $MainVersion) --dir $OutDir --title ("hongguo TV " + $MainVersion) --notes $Notes
     if ($LASTEXITCODE -ne 0) { throw "发布失败" }
     Write-Host "已发布并设为最新：v$MainVersion" -ForegroundColor Green
     return

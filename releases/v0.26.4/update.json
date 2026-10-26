@@ -1,0 +1,35 @@
+{
+    "versionCode":  42,
+    "versionName":  "0.26.4",
+    "notes":  "修复长时间观看后播放失败：平台设备身份有时效（实测约 2 小时），启动后身份一直复用会被拒。现在设备注册每 30 分钟自动续期，且取流失败（空响应/101000）时强制重新注册并重试一次。",
+    "variants":  {
+                     "sw-tv":  {
+                                   "versionCode":  42,
+                                   "versionName":  "0.26.4",
+                                   "file":  "hongguotv-0.26.4-sw-tv-debug.apk",
+                                   "size":  25449091,
+                                   "sha256":  "8936fc8421e202c02068bea85eecc484bf5d725a8bb059b6b8ef260f8c456a59"
+                               },
+                     "sw-a7":  {
+                                   "versionCode":  42,
+                                   "versionName":  "0.26.4",
+                                   "file":  "hongguotv-0.26.4-sw-a7-debug.apk",
+                                   "size":  26333827,
+                                   "sha256":  "612ca76b31c50a6ebb099c480be2c1bfb3a6531e6fc77d1da0752fc31dc821ce"
+                               },
+                     "hw-phone":  {
+                                      "versionCode":  42,
+                                      "versionName":  "0.26.4",
+                                      "file":  "hongguotv-0.26.4-hw-phone-debug.apk",
+                                      "size":  10346666,
+                                      "sha256":  "b2ff977ae02d12315afbc4e6b22800ac96714e7ced18e8a7d2cef94ef96e216e"
+                                  },
+                     "a5":  {
+                                "versionCode":  43,
+                                "versionName":  "0.22.10",
+                                "file":  "hongguotv-0.22.10-android5-debug.apk",
+                                "size":  10880537,
+                                "sha256":  "185786b83225f4792a2a60b696c855b73be9950f22b6a3b1f0192b8d5f7d11dd"
+                            }
+                 }
+}

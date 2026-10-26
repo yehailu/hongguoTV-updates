@@ -15,6 +15,21 @@ fun main(args: Array<String>) {
         println("theater-all items=${all.getOrNull()?.items?.size} err=${all.exceptionOrNull()?.message}")
         return
     }
+    if(args.any { it.startsWith("--playtest") }) {
+        val n=(args.firstOrNull { it.startsWith("--playtest=") }?.substringAfter("=")?.toIntOrNull()) ?: 6
+        val home=repository.home(1,ContentType.SHORT)
+        var ok=0; var fail=0
+        for(item in home.items.take(n)) {
+            val d=runCatching { repository.detail(item.id) }.getOrNull()
+            if(d==null) { println("FAIL detail ${item.id} ${item.title}"); fail++; continue }
+            val vid=d.episodes.firstOrNull().orEmpty()
+            val st=runCatching { repository.stream(vid,720) }.getOrNull()
+            if(st!=null && st.url.isNotBlank()) { ok++; println("PASS ${item.id} ${item.title} -> ${st.quality} ${st.codec}") }
+            else { fail++; println("FAIL stream ${item.id} ${item.title} vid=$vid err=${runCatching{repository.stream(vid,720)}.exceptionOrNull()?.message}") }
+        }
+        println("SUMMARY ok=$ok fail=$fail")
+        return
+    }
     if(args.contains("--selfcheck")) {
         var pass=0; var fail=0
         fun check(name: String, body: () -> String) {
@@ -40,6 +55,15 @@ fun main(args: Array<String>) {
         check("stream-720") { val v=repository.stream(episodeId,720); v.quality+" "+v.codec }
         check("danmaku") { val w=DanmakuRepository(repository.http).window(seriesId,episodeId,90_000,0); w.comments.size.toString()+" 条" }
         println("SUMMARY pass="+pass+" fail="+fail)
+        return
+    }
+    args.firstOrNull { it.startsWith("--ep=") }?.substringAfter("=")?.let { spec ->
+        val seriesId=spec.substringBefore(':'); val n=spec.substringAfter(':').toIntOrNull() ?: 1
+        val d=repository.detail(seriesId)
+        val vid=d.episodes.getOrNull(n-1) ?: d.episodes.first()
+        println("episode[$n] vid=$vid of ${d.episodes.size}")
+        val st=runCatching { repository.stream(vid,720) }
+        println("stream ${if(st.isSuccess) "OK "+st.getOrNull()?.quality+" "+st.getOrNull()?.codec else "FAIL "+st.exceptionOrNull()?.message}")
         return
     }
     if(args.contains("--register")) {

@@ -57,12 +57,16 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private fun categoryPath(type: ContentType)=if(type==ContentType.COMIC) "comic-drama" else "real-drama"
     @Volatile private var registrationCookies: Map<String,String> = emptyMap()
     @Volatile private var registerInFlight = false
+    @Volatile private var registeredAt = 0L
 
-    /** 平台要求「注册过的设备」才给数据；这里做一次性匿名注册，失败也不阻断回退路径。 */
+    /**
+     * 平台要求「注册过的设备」才给数据；身份有时效——实测看 2 小时后取流开始被拒（空响应 / 101000），
+     * 所以这里除了首次注册，还按 [REGISTER_TTL_MS] 到期自动重新注册续期，失败也不阻断回退路径。
+     */
     fun registerDeviceIfNeeded(): Boolean {
-        if(VendorConstants.registered) return true
+        if(VendorConstants.registered && System.currentTimeMillis()-registeredAt < REGISTER_TTL_MS) return true
         synchronized(this) {
-            if(VendorConstants.registered) return true
+            if(VendorConstants.registered && System.currentTimeMillis()-registeredAt < REGISTER_TTL_MS) return true
             if(registerInFlight) return false
             registerInFlight = true
         }
@@ -84,6 +88,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         }.getOrNull() ?: return false
         VendorConstants.adopt(registered.deviceId,registered.installId)
         registrationCookies=registered.cookies
+        registeredAt=System.currentTimeMillis()
         return true
     }
     /** 启动时把上次注册的身份与 Cookie 放回来，避免每次冷启动都重新注册。 */
@@ -463,7 +468,14 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     /** Diagnostics: every variant the API returns, ignoring device limits (used by the probe). */
     internal fun variantReport(id: String): List<String> = loadVariants(id).rows.map { "${it.height}P/${it.codec}" }
     fun stream(id: String, maxQuality: Int = 1080, supportedCodecs: Set<String> = emptySet()): StreamInfo {
-        val loaded=loadVariants(id)
+        // 身份可能已过期（空响应 / 101000）：强制重新注册后重试一次，避免观众卡在续播。
+        var variants=runCatching { loadVariants(id) }.getOrNull()
+        if(variants==null) {
+            registeredAt=0
+            registerDeviceIfNeeded()
+            variants=runCatching { loadVariants(id) }.getOrNull()
+        }
+        val loaded=variants ?: throw IOException("播放接口暂不可用，请稍后重试或重启应用")
         val info=loaded.info; val rows=loaded.rows
         // A head unit without HEVC cannot play a 1080P HEVC variant any better at 720P: pick a
         // variant whose codec the device actually decodes before falling back to quality alone.
@@ -481,6 +493,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         // 网站搜索混合两类内容：video_data.genre 205 是漫剧，203 是短剧
         // （2026-10-13 用站点自带的漫剧热播榜与短剧分类列表逐条核对确认）。
         private const val COMIC_WEB_GENRE="205"
+        private const val REGISTER_TTL_MS = 30L * 60 * 1000L
         private const val RELATED_CELL_SHOW_TYPE=547
         private const val RELATED_ATTEMPTS=8
         private val RELATED_HOSTS=listOf(

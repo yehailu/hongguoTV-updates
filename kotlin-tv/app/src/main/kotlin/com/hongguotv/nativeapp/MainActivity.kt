@@ -587,16 +587,11 @@ class MainActivity: Activity() {
             }
         } else if(tab==2) {
             val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
-            val boardTitle=rankGenre?.let { "${it.name} · ${library.contentType.label}热播" } ?: "${rankBoard.label}热播榜"
+            val boardTitle=rankGenre?.let { "${it.name} · 热播" } ?: "红果热播榜"
             heading.addView(text(boardTitle,25f).apply { setTypeface(null,Typeface.BOLD); maxLines=1; ellipsize=TextUtils.TruncateAt.END },lp(0,-2).apply { weight=1f })
             lateinit var genrePick: TextView
             genrePick=addButton(heading,rankGenre?.let { "题材 · ${it.name}" } ?: "题材") { showRankGenrePicker(genrePick) }
                 .apply { nextFocusUpId=nav[tab].id }
-            rankSwitch=addButton(heading,if(rankBoard==RankBoard.COMIC) "换到短剧榜" else "换到漫剧榜") {
-                rankBoard=if(rankBoard==RankBoard.COMIC) RankBoard.REAL else RankBoard.COMIC
-                rankGenre=null
-                page=1; catalogFocus=""; tabState.remove(2); tabFocus.remove(2); showCatalog(true)
-            }.apply { nextFocusUpId=nav[tab].id }
             rankRefresh=addButton(heading,if(rankGenre!=null) "换一批" else "刷新榜单") { page=1; catalogFocus=""; showCatalog(true) }.apply { nextFocusUpId=nav[tab].id }
             header.addView(heading)
             rankSubtitle=text(rankSubtitleText(load),13f,muted)

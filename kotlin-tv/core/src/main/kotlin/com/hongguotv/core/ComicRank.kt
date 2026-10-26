@@ -10,7 +10,9 @@ import java.io.IOException
 /** Website rank boards share one layout and one serialized payload shape. */
 enum class RankBoard(val path: String, val route: String, val rankKey: String, val label: String) {
     COMIC("hot-comic-drama","rank_hot-comic-drama/page","comic","漫剧"),
-    REAL("hot-real-drama","rank_hot-real-drama/page","real","短剧");
+    REAL("hot-real-drama","rank_hot-real-drama/page","real","短剧"),
+    // 站点已把分类型榜合并成「红果热播榜」：一个列表混排漫剧与短剧，路径 hot-drama，rankKey 为 hongguo。
+    HOT("hot-drama","rank_hot-drama/page","hongguo","热播");
 }
 
 /** Read the website's serialized data only; never execute its scripts. */
@@ -18,8 +20,12 @@ internal object ComicRank {
     fun parse(html: String, page: Int, board: RankBoard = RankBoard.COMIC): CatalogPage {
         try {
             val document=Jsoup.parse(html)
-            val updatedText=runCatching { ContentRepository.extractRouter(html).optJSONObject("loaderData")
-                ?.optJSONObject(board.route)?.str("updatedText") }.getOrNull().orEmpty()
+            val unified=ContentRepository.extractRouter(html).optJSONObject("loaderData")?.optJSONObject(RankBoard.HOT.route)
+            val updatedText=runCatching {
+                ContentRepository.extractRouter(html).optJSONObject("loaderData")
+                    ?.optJSONObject(board.route)?.str("updatedText")
+                    ?: unified?.str("updatedText")
+            }.getOrNull().orEmpty()
             for(tag in document.select("script[data-fn-name][data-fn-args]")) {
                 val name=tag.attr("data-fn-name")
                 if(name!="r" && name!="mergeLoaderData") continue
@@ -57,9 +63,12 @@ internal object ComicRank {
 
     private fun renderedPage(document: Document, html: String, page: Int, board: RankBoard): CatalogPage {
         // Some responses contain rendered cards while the deferred JSON is still unresolved.
-        val route=ContentRepository.extractRouter(html).optJSONObject("loaderData")
-            ?.optJSONObject(board.route) ?: throw IOException("页面没有${board.label}榜单数据")
-        if(route.str("rankKey")!=board.rankKey || route.optInt("pageNum")!=page) throw IOException("${board.label}分页信息异常")
+        val loader=ContentRepository.extractRouter(html).optJSONObject("loaderData")
+        val route=loader?.optJSONObject(board.route) ?: loader?.optJSONObject(RankBoard.HOT.route)
+            ?: throw IOException("页面没有${board.label}榜单数据")
+        val unifiedPage=route.str("rankKey")==RankBoard.HOT.rankKey
+        if(!unifiedPage && route.str("rankKey")!=board.rankKey) throw IOException("${board.label}分页信息异常")
+        if(route.optInt("pageNum")!=page) throw IOException("${board.label}分页信息异常")
         val positions=linkedMapOf<String,RankPosition>()
         val cards=document.select("article[aria-labelledby^=rank-title-]")
         val pageSize=cards.size

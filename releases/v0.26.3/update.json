@@ -1,0 +1,35 @@
+{
+    "versionCode":  40,
+    "versionName":  "0.26.3",
+    "notes":  "榜单修复：站点已把分类型榜合并为「红果热播榜」（/rank/hot-drama，一个列表混排漫剧与短剧，SSR 卡片），旧的 hot-comic/hot-real 页面已停止返回。改为解析统一榜单的渲染卡片（article[aria-labelledby^=rank-title-]），排行榜标题改为「红果热播榜」并去掉换榜按钮；首页漫剧货架改用分类目录，避免混排。",
+    "variants":  {
+                     "sw-tv":  {
+                                   "versionCode":  40,
+                                   "versionName":  "0.26.3",
+                                   "file":  "hongguotv-0.26.3-sw-tv-debug.apk",
+                                   "size":  25449095,
+                                   "sha256":  "71d85c6a5f81189e62d271d91bb08e5f675b008427d0fc9732b8cc7e24af40c8"
+                               },
+                     "sw-a7":  {
+                                   "versionCode":  40,
+                                   "versionName":  "0.26.3",
+                                   "file":  "hongguotv-0.26.3-sw-a7-debug.apk",
+                                   "size":  26333827,
+                                   "sha256":  "d5392928f8f913f1e12f69df7eb89dc77c30f65f2589758d1a1012a1a5077d9a"
+                               },
+                     "hw-phone":  {
+                                      "versionCode":  40,
+                                      "versionName":  "0.26.3",
+                                      "file":  "hongguotv-0.26.3-hw-phone-debug.apk",
+                                      "size":  10345394,
+                                      "sha256":  "8cd9bca3bf3299084555f92a68cf1f8c3fc229cd514e7dd9714dcca2073e7175"
+                                  },
+                     "a5":  {
+                                "versionCode":  41,
+                                "versionName":  "0.22.9",
+                                "file":  "hongguotv-0.22.9-android5-debug.apk",
+                                "size":  10879239,
+                                "sha256":  "fec206007caa1f1667132a6c45f875a20ecd01d8911517048d3cc7e5d493a495"
+                            }
+                 }
+}

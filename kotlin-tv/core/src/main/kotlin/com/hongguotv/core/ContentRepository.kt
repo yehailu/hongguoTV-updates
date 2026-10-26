@@ -138,7 +138,8 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private fun valid(rows: List<Series>) = rows.filter { it.id.matches(Regex("[0-9]{1,30}")) && it.title.isNotBlank() }.distinctBy { it.id }
     fun ranking(board: RankBoard, page: Int = 1): CatalogPage {
         require(page in 1..100)
-        return ComicRank.parse(textRetry("$site/rank/${board.path}?page=$page",attempts=7),page,board)
+        // 分类型榜已合并：统一读 /rank/hot-drama（一个列表混排漫剧与短剧）。
+        return ComicRank.parse(textRetry("$site/rank/${RankBoard.HOT.path}?page=$page",attempts=7),page,board)
     }
     fun comicRanking(page: Int = 1)=ranking(RankBoard.COMIC,page)
     fun realRanking(page: Int = 1)=ranking(RankBoard.REAL,page)
@@ -161,8 +162,10 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     fun home(page: Int = 1, type: ContentType = ContentType.SHORT, genre: Genre? = null): CatalogPage {
         require(page in 1..100)
         if(genre!=null) return categoryListing("$site/category/${categoryPath(type)}/${genre.slug}"+if(page>1) "?page=$page" else "",page,"题材",genre)
-        // 漫剧首页读的是榜单页，榜单偶发超时：退到同类型的分类目录，至少让首页有内容。
-        if(type==ContentType.COMIC) return runCatching { comicRanking(page) }.getOrElse { categoryListing("$site/category/comic-drama",page,"热门") }
+        // 漫剧首页：统一热播榜是混排的，首页「漫剧」货架改用同类型分类目录，内容类型才对；
+        // 分类目录失败时再退回榜单。
+        if(type==ContentType.COMIC) return runCatching { categoryListing("$site/category/comic-drama",page,"热门") }
+            .getOrElse { comicRanking(page) }
         return categoryListing("$site/category?tab=1&sort_type=1"+if(page>1) "&page=$page" else "",page,"首页")
     }
     private fun categoryListing(url: String,page: Int,label: String,genre: Genre? = null): CatalogPage {

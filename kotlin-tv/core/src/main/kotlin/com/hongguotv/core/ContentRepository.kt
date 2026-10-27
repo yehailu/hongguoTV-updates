@@ -304,8 +304,13 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val series=card(o).copy(id=id)
         // 详情页下方「相关作品」：App 接口给得更全（含同 IP、各季），失败再退回官网详情页那一栏。
         val appRelated=runCatching { relatedWorks(id,series.title) }.getOrDefault(emptyList())
+        // 「其他季」优先从 plan 接口结果里挑（一次拿全，网页搜索只能出前 7 季）；不够再退回网页搜索。
+        val base=baseName(series.title)
+        val planSeasons=appRelated.filter { base.isNotBlank() && baseName(it.title)==base && it.id!=id }
+            .sortedBy { seasonNumber(it.title) }
+        val sameNameList=if(planSeasons.size>=2) planSeasons else sameName(series)
         // App 接口偶尔只回 1~2 条（线路半通），少于 3 条时仍用官网详情页那一栏，避免推荐栏突然变空。
-        return Detail(series,episodes,if(appRelated.size>=3) appRelated else related(html,series),sameName(series))
+        return Detail(series,episodes,if(appRelated.size>=3) appRelated else related(html,series),sameNameList)
     }
     // The detail page has no dedicated same-name group, so other seasons are collected by searching the
     // website for the season-independent base title and keeping every entry that shares that base name.
@@ -464,6 +469,39 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             }
         }
         return out.values.toList()
+    }
+    /** 诊断：把 plan 接口的原始 cell 结构打出来，用于排查「相关作品」只回少量条目的问题。 */
+    internal fun relatedDebug(id: String): String {
+        val sb=StringBuilder()
+        for(attempt in 0 until RELATED_ATTEMPTS) {
+            val host=RELATED_HOSTS[attempt % RELATED_HOSTS.size]
+            val values=VendorConstants.device.toMutableMap()
+            values.putAll(linkedMapOf("scene" to "10","from" to "detail_page_more_related","book_id" to id,
+                "user_is_login" to "0","bookstore_tab" to "0","search_middle_page_version" to "0",
+                "pad_column_detail" to "0","device_level" to "3","limit" to "0","offset" to "0"))
+            val signed=signer.sign("https://$host/reading/bookapi/plan/v:version/",values)
+            val raw=runCatching { text(signed.url,signed) }.getOrNull() ?: continue
+            if(raw.isBlank()) { sb.append("$host blank\n"); continue }
+            val data=JSONObject(raw)
+            sb.append("$host code=${data.optInt("code",-1)}\n")
+            val cells=data.optJSONArray("data") ?: JSONArray()
+            sb.append("cells=${cells.length()}\n")
+            for(i in 0 until cells.length()) {
+                val c=cells.optJSONObject(i)
+                val vd=c.optJSONArray("video_data")
+                sb.append("  cell[$i] show_type=${c.optInt("show_type")} cell_name=${c.optString("cell_name")} video_data=${vd?.length() ?: 0}\n")
+                if(vd!=null && vd.length()>0) {
+                    val first=vd.optJSONObject(0)
+                    sb.append("    first keys="+first.keySet().joinToString(",")+"\n")
+                    sb.append("    first="+first.toString().take(300)+"\n")
+                }
+            }
+            val parsed=parseRelatedCells(data)
+            sb.append("parsed=${parsed.size}\n")
+            parsed.take(20).forEach { sb.append("   - "+it.id+" "+it.title+"\n") }
+            return sb.toString()
+        }
+        return "all hosts failed"
     }
     /** Diagnostics: every variant the API returns, ignoring device limits (used by the probe). */
     internal fun variantReport(id: String): List<String> = loadVariants(id).rows.map { "${it.height}P/${it.codec}" }

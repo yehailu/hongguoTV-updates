@@ -66,6 +66,15 @@ fun main(args: Array<String>) {
         println("stream ${if(st.isSuccess) "OK "+st.getOrNull()?.quality+" "+st.getOrNull()?.codec else "FAIL "+st.exceptionOrNull()?.message}")
         return
     }
+    args.firstOrNull { it.startsWith("--relraw=") }?.substringAfter("=")?.let { id ->
+        println(repository.relatedDebug(id)); return
+    }
+    args.firstOrNull { it.startsWith("--seasons=") }?.substringAfter("=")?.let { id ->
+        val d=repository.detail(id)
+        println("seasons="+d.sameName.size+" related="+d.related.size)
+        d.sameName.forEach { println("   - "+it.id+" "+it.title) }
+        return
+    }
     if(args.contains("--register")) {
         val ok=repository.registerDeviceIfNeeded()
         val snap=repository.deviceSnapshot()

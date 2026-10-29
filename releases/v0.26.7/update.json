@@ -1,0 +1,35 @@
+{
+    "versionCode":  48,
+    "versionName":  "0.26.7",
+    "notes":  "播放进度条支持拖动与点击定位。",
+    "variants":  {
+                     "sw-tv":  {
+                                   "versionCode":  48,
+                                   "versionName":  "0.26.7",
+                                   "file":  "hongguotv-0.26.7-sw-tv-debug.apk",
+                                   "size":  25449091,
+                                   "sha256":  "7d53073a596bfe1900dc18cee70b5251e5bb029056c9385ca748e022d35c2975"
+                               },
+                     "sw-a7":  {
+                                   "versionCode":  48,
+                                   "versionName":  "0.26.7",
+                                   "file":  "hongguotv-0.26.7-sw-a7-debug.apk",
+                                   "size":  26350211,
+                                   "sha256":  "8d7ec8694937240afbc185e47a077742d5c50078261f4dac089047e81f102119"
+                               },
+                     "hw-phone":  {
+                                      "versionCode":  48,
+                                      "versionName":  "0.26.7",
+                                      "file":  "hongguotv-0.26.7-hw-phone-debug.apk",
+                                      "size":  10350994,
+                                      "sha256":  "38b25580fd7f25bf3adf904b6033fc552467054fdb40c61bf9c8025162bf731a"
+                                  },
+                     "a5":  {
+                                "versionCode":  49,
+                                "versionName":  "0.22.13",
+                                "file":  "hongguotv-0.22.13-android5-debug.apk",
+                                "size":  10885131,
+                                "sha256":  "cdd21c8c288b683f575e65db39d63c72794dc5dd4313dc5d74d53f4c93602a69"
+                            }
+                 }
+}

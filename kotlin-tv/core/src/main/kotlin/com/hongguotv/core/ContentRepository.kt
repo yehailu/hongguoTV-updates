@@ -296,13 +296,19 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     fun detail(id: String): Detail {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val html=textRetry("$site/detail?series_id=$id")
-        val loader=extractRouter(html).getJSONObject("loaderData")
-        val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
-        val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
-        val episodes=(0 until raw.length()).map { raw.getString(it) }
-        if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
-        val series=card(o).copy(id=id)
+        // 剧集列表优先走 App 详情接口（官网详情页已逐步下线，见 [detailViaApi]），失败再退回官网。
+        val api=detailViaApi(id)
+        val series: Series; val episodes: List<String>; val html: String?
+        if(api!=null) { series=api.series; episodes=api.episodes; html=null }
+        else {
+            val page=textRetry("$site/detail?series_id=$id"); html=page
+            val loader=extractRouter(page).getJSONObject("loaderData")
+            val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
+            val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
+            episodes=(0 until raw.length()).map { raw.getString(it) }
+            if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
+            series=card(o).copy(id=id)
+        }
         // 详情页下方「相关作品」：App 接口给得更全（含同 IP、各季），失败再退回官网详情页那一栏。
         val appRelated=runCatching { relatedWorks(id,series.title) }.getOrDefault(emptyList())
         // 「其他季」优先从 plan 接口结果里挑（一次拿全，网页搜索只能出前 7 季）；不够再退回网页搜索。
@@ -311,8 +317,38 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             .sortedBy { seasonNumber(it.title) }
         val sameNameList=if(planSeasons.size>=2) planSeasons else sameName(series)
         // App 接口偶尔只回 1~2 条（线路半通），少于 3 条时仍用官网详情页那一栏，避免推荐栏突然变空。
-        return Detail(series,episodes,if(appRelated.size>=3) appRelated else related(html,series),sameNameList)
+        val relatedAll=when {
+            appRelated.size>=3 -> appRelated
+            html!=null -> related(html,series)
+            else -> appRelated
+        }
+        return Detail(series,episodes,relatedAll,sameNameList)
     }
+    /** 剧集详情（简介 + 分集列表）走 App 播放侧接口：POST /novel/player/video_detail/v1/，body {"series_id":"<id>"}。 */
+    private fun detailViaApi(id: String): Detail? = runCatching {
+        registerDeviceIfNeeded()
+        val values=VendorConstants.device.toMutableMap()
+        values["series_id"]=id
+        val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_detail/v1/",values,"{}".toByteArray())
+        val raw=text(signed.url,signed)
+        if(raw.isBlank()) throw IOException("剧集详情暂不可用")
+        val root=JSONObject(raw)
+        if(root.optInt("code",-1)!=0) throw IOException("剧集详情暂不可用（${root.optInt("code")}）")
+        val o=root.optJSONObject("data")?.optJSONObject("video_data") ?: throw IOException("剧集详情结构已变化")
+        val episodes=o.optJSONArray("video_list")?.objects()
+            ?.sortedBy { it.optInt("vid_index",0) }
+            ?.map { it.str("vid") }
+            ?.filter { it.matches(Regex("[0-9]{1,30}")) }
+            ?.distinct().orEmpty()
+        if(episodes.isEmpty()) throw IOException("分集数据为空")
+        val count=o.optInt("episode_cnt",episodes.size)
+        val tags=(o.optJSONArray("category_schema") ?: JSONArray()).let { arr ->
+            (0 until minOf(arr.length(),5)).mapNotNull { arr.optJSONObject(it)?.str("name") }.filter { it.isNotBlank() }.joinToString(" · ")
+        }
+        val series=Series(id,o.str("series_title"),cleanUrl(o.str("series_cover")),o.str("series_intro"),
+            o.str("episode_right_text").ifEmpty { if(count>0) "全 $count 集" else "" },tags)
+        Detail(series,episodes)
+    }.getOrNull()
     // The detail page has no dedicated same-name group, so other seasons are collected by searching the
     // website for the season-independent base title and keeping every entry that shares that base name.
     private fun sameName(current: Series): List<Series> {

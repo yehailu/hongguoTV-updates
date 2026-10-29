@@ -1,0 +1,35 @@
+{
+    "versionCode":  50,
+    "versionName":  "0.26.8",
+    "notes":  "修复播放失败。",
+    "variants":  {
+                     "sw-tv":  {
+                                   "versionCode":  50,
+                                   "versionName":  "0.26.8",
+                                   "file":  "hongguotv-0.26.8-sw-tv-debug.apk",
+                                   "size":  25449095,
+                                   "sha256":  "24f113c6b1b4cc8b23df99bc94646a73d48c80dfb03d1d7e060c1fbefed0740d"
+                               },
+                     "sw-a7":  {
+                                   "versionCode":  50,
+                                   "versionName":  "0.26.8",
+                                   "file":  "hongguotv-0.26.8-sw-a7-debug.apk",
+                                   "size":  26350211,
+                                   "sha256":  "dd356a9ed5130883d0baa0af8d68dde0fc60a6ab5b664932e5cf132cf22d25e5"
+                               },
+                     "hw-phone":  {
+                                      "versionCode":  50,
+                                      "versionName":  "0.26.8",
+                                      "file":  "hongguotv-0.26.8-hw-phone-debug.apk",
+                                      "size":  10351250,
+                                      "sha256":  "4fa9911c8edd6d64910fb46916a6264adc37cd31a98b53493b4e223fc859aabd"
+                                  },
+                     "a5":  {
+                                "versionCode":  51,
+                                "versionName":  "0.22.14",
+                                "file":  "hongguotv-0.22.14-android5-debug.apk",
+                                "size":  10885352,
+                                "sha256":  "23a0769f5cbf8d20bc71d65ea12fe8f162b697dd1eaba208c15f7a03d0cfef0e"
+                            }
+                 }
+}

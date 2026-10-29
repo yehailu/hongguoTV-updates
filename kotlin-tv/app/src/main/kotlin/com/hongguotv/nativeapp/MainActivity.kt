@@ -245,7 +245,7 @@ class MainActivity: Activity() {
     private var pausedForLifecycle=false
     private lateinit var hud: LinearLayout
     private lateinit var playbackText: TextView
-    private lateinit var progressBar: ProgressBar
+    private lateinit var seekBar: TouchSeekBar
     private lateinit var controls: LinearLayout
     private var panel=false
     private var transportPlay: TextView?=null
@@ -1786,14 +1786,16 @@ class MainActivity: Activity() {
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
-            progressBar=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }; hud.addView(progressBar,lp(-1,dp(4)))
+            seekBar=TouchSeekBar(this)
+            seekBar.onSeek={ ms, final -> if(final) seekTo(ms) else { pendingSeek=ms; updatePlaybackText() } }
+            hud.addView(seekBar,lp(-1,dp(24)))
             hud.addView(text(if(packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN)) "点按画面 调出/收起菜单" else "确认 暂停/播放    左右 快退/快进    长按右键 3× 快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
         playerView?.setShowBuffering(if(seamless) PlayerView.SHOW_BUFFERING_NEVER else PlayerView.SHOW_BUFFERING_ALWAYS)
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
-        playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay()
+        playbackText.text="正在获取播放地址…"; seekBar.positionMs=0; seekBar.durationMs=0; seekBar.visibility=View.VISIBLE; hidePlaybackOverlay()
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
@@ -1938,7 +1940,7 @@ class MainActivity: Activity() {
         }
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
         saveProgress(); cancelRecovery(); cancelPrefetch()
-        playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
+        playError=true; player?.pause(); seekBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
         playbackText.text=if(TlsSupport.isCertificateProblem(problem)) {
@@ -2138,6 +2140,47 @@ class MainActivity: Activity() {
         if(playError) return
         if(hud.visibility==View.VISIBLE) hidePlaybackOverlay() else showPanel()
     }
+    /** 可拖动、可点击定位的进度条：触屏拖动实时预览时间，抬手落点；拖动时拦截父容器滚动。 */
+    private inner class TouchSeekBar(context: Context) : View(context) {
+        var onSeek: ((Long, Boolean) -> Unit)? = null
+        var durationMs: Long = 0
+            set(value) { field = value; invalidate() }
+        var positionMs: Long = 0
+            set(value) { field = value; invalidate() }
+        private val trackH = dp(4).toFloat()
+        private val thumbR = dp(7).toFloat()
+        private val paintTrack = android.graphics.Paint().apply { color = surface; isAntiAlias = true }
+        private val paintFill = android.graphics.Paint().apply { color = accent; isAntiAlias = true }
+        private val paintThumb = android.graphics.Paint().apply { color = accent; isAntiAlias = true }
+        init { isClickable = true; isFocusable = false }
+        override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+            if (!isEnabled) return false
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { parent?.requestDisallowInterceptTouchEvent(true); updateFromX(event.x); return true }
+                android.view.MotionEvent.ACTION_MOVE -> { updateFromX(event.x); return true }
+                android.view.MotionEvent.ACTION_UP -> { updateFromX(event.x); parent?.requestDisallowInterceptTouchEvent(false); onSeek?.invoke(positionMs, true); performClick(); return true }
+                android.view.MotionEvent.ACTION_CANCEL -> { parent?.requestDisallowInterceptTouchEvent(false); onSeek?.invoke(positionMs, true); return true }
+            }
+            return super.onTouchEvent(event)
+        }
+        private fun updateFromX(x: Float) {
+            if (durationMs <= 0) return
+            val w = width.toFloat(); if (w <= 0) return
+            positionMs = (durationMs * (x / w).coerceIn(0f, 1f)).toLong()
+            onSeek?.invoke(positionMs, false)
+        }
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            val cy = height / 2f
+            val left = thumbR; val right = width - thumbR
+            if (right <= left) return
+            canvas.drawRoundRect(left, cy - trackH / 2, right, cy + trackH / 2, trackH / 2, trackH / 2, paintTrack)
+            val frac = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+            val fillRight = left + (right - left) * frac
+            if (fillRight > left) canvas.drawRoundRect(left, cy - trackH / 2, fillRight, cy + trackH / 2, trackH / 2, trackH / 2, paintFill)
+            canvas.drawCircle(left + (right - left) * frac, cy, thumbR, paintThumb)
+        }
+    }
     private fun showHud() {
         if(screen!="player") return
         hud.visibility=View.VISIBLE; updatePlaybackText(); main.removeCallbacks(hideHud)
@@ -2153,7 +2196,7 @@ class MainActivity: Activity() {
         val duration=p.duration.coerceAtLeast(0); val position=pendingSeek ?: p.currentPosition
         val state=when { ffActive -> "3× 快进中"; p.playbackState==Player.STATE_BUFFERING -> "缓冲中"; p.playbackState==Player.STATE_ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
         playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  ${PlaybackSpeed.label(p.playbackParameters.speed)}"+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
-        progressBar.progress=if(duration>0) (position*1000/duration).toInt().coerceIn(0,1000) else 0
+        seekBar.durationMs=duration; seekBar.positionMs=position
     }
     private fun requestPlayback(play: Boolean) {
         requestedAutoplay=play; pausedForLifecycle=!play

@@ -26,6 +26,12 @@ internal object VendorConstants {
         installIid = installId
         registered = true
     }
+    /** 平台明确拒绝该身份（如播放回 101000）时，换一份全新身份重新注册。 */
+    fun resetIdentity() {
+        installIid = randomInstallId()
+        installDeviceId = randomInstallId()
+        registered = false
+    }
     private fun randomInstallId(): String = buildString(16) { append('1'); repeat(15) { append(Random.nextInt(10)) } }
     private fun randomNonce(): String = Base64.getUrlEncoder().withoutPadding().encodeToString(Random.nextBytes(18))
     val device: Map<String, String>

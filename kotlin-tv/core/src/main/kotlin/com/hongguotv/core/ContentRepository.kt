@@ -58,6 +58,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     @Volatile private var registrationCookies: Map<String,String> = emptyMap()
     @Volatile private var registerInFlight = false
     @Volatile private var registeredAt = 0L
+    @Volatile private var deviceRejected = false
 
     /**
      * 平台要求「注册过的设备」才给数据；身份有时效——实测看 2 小时后取流开始被拒（空响应 / 101000），
@@ -370,6 +371,11 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         }.sortedByDescending { it.height }.toList()
         return StreamVariants(info,rows)
     }
+    private fun modelOf(value: Any?): JSONObject? = when(value) {
+        is JSONObject -> value
+        is String -> runCatching { JSONObject(value) }.getOrNull()
+        else -> null
+    }
     /**
      * 平台 2026-10-14 改过播放接口：带场景段的 `multi_video_model/:dr_scene/v1/` 回「200 + 空体」，
      * 旧的 `multi_video_model/v1/` 回 `110001`，目前可用的是 `player/video_model/v1/`（请求体是
@@ -400,10 +406,14 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
                 }
                 if(response.isBlank()) throw IOException("播放接口暂不可用（空响应）")
                 val data=JSONObject(response)
-                if(data.optInt("Code",data.optInt("code",0))!=0) throw IOException("播放接口暂不可用（${data.optInt("code",data.optInt("Code"))}）")
+                val code=data.optInt("Code",data.optInt("code",0))
+                if(code==101000) deviceRejected=true
+                if(code!=0) throw IOException("播放接口暂不可用（$code）")
                 val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
-                val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
-                entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
+                // 新路由 data.video_model；旧路由 data[<vid>].video_model，两者都可能是字符串化 JSON。
+                modelOf(map.opt("video_model"))
+                    ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull()?.let { modelOf(it.opt("video_model")) }
+                    ?: throw IOException("播放信息为空")
             }
             attempt.getOrNull()?.let { return it }
             (attempt.exceptionOrNull() as? IOException)?.let { failure=it }
@@ -510,6 +520,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         var variants=runCatching { loadVariants(id) }.getOrNull()
         if(variants==null) {
             registeredAt=0
+            if(deviceRejected) { deviceRejected=false; VendorConstants.resetIdentity() }
             registerDeviceIfNeeded()
             variants=runCatching { loadVariants(id) }.getOrNull()
         }

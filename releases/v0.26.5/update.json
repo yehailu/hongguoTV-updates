@@ -1,0 +1,35 @@
+{
+    "versionCode":  44,
+    "versionName":  "0.26.5",
+    "notes":  "修复同系列各季显示不全：详情页「其他季」之前走网页搜索只能出前 7 季，现改为优先从 App 相关作品接口（plan/v:version）里按剧名取全部季数（如《聚宝仙盆之杂灵根才是真BOSS》14 季一次出全），接口不足时再退回网页搜索。",
+    "variants":  {
+                     "sw-tv":  {
+                                   "versionCode":  44,
+                                   "versionName":  "0.26.5",
+                                   "file":  "hongguotv-0.26.5-sw-tv-debug.apk",
+                                   "size":  25449091,
+                                   "sha256":  "1a9898e1adcbc59e6aac96a88c3a381fe1c0033d25038440ad4d19122d42099c"
+                               },
+                     "sw-a7":  {
+                                   "versionCode":  44,
+                                   "versionName":  "0.26.5",
+                                   "file":  "hongguotv-0.26.5-sw-a7-debug.apk",
+                                   "size":  26333831,
+                                   "sha256":  "2ace5357f76fd48f0e71b19ff8654b3fd626e34eda19b9889a85c87682adec50"
+                               },
+                     "hw-phone":  {
+                                      "versionCode":  44,
+                                      "versionName":  "0.26.5",
+                                      "file":  "hongguotv-0.26.5-hw-phone-debug.apk",
+                                      "size":  10348890,
+                                      "sha256":  "f05a68991f7b62d98c213b6147059f47026b078445a7de3c8d65d24075fbc4f3"
+                                  },
+                     "a5":  {
+                                "versionCode":  45,
+                                "versionName":  "0.22.11",
+                                "file":  "hongguotv-0.22.11-android5-debug.apk",
+                                "size":  10882632,
+                                "sha256":  "91d6ebcfc9b6d92b2d8c85a6c3fddb1a885a9ec4702d00d53de40e16a9d7360c"
+                            }
+                 }
+}

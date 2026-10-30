@@ -14,20 +14,21 @@
 - **个性化**：文字大小、界面风格、自定义背景、手机备份与恢复
 - **应用内更新**：发现新版本时应用内下载并升级
 
-## 安装包（按设备四选一）
+## 安装包（按设备选择）
 
 | 安装包 | 适用设备 | 系统要求 |
 |---|---|---|
 | hongguotv-0.XX.X-sw-tv-debug.apk | 电视 / 车机（首选） | Android 8.1+ |
 | hongguotv-0.XX.X-sw-a7-debug.apk | Android 7 的电视 / 车机 | Android 7.0+ |
 | hongguotv-0.XX.X-hw-phone-debug.apk | 手机 / 平板（可转屏） | Android 8.0+ |
-| hongguotv-0.XX.X-android5-debug.apk | 老旧设备 | Android 5.0+ |
+| hongguotv-0.XX.X-a41-debug.apk | Android 4.1–4.4 老设备 | Android 4.1+ |
+| hongguotv-0.XX.X-android5-debug.apk | Android 5 老旧设备 | Android 5.0+ |
 
 ## 0.27.0-test.1 测试构建与 Android 4.1 适配
 
 [测试版安装与发布说明](RELEASE_0.27.0_TEST.md) · [测试版入口](https://cnb.cool/lzyr9010/hongguoTV-updates/-/releases/tag/v0.27.0-test.1)
 
-**测试版不设为 latest，不触发稳定客户端自动更新。与原发布版本签名不同，不能直接覆盖；请先备份收藏和进度，再卸载原版、手动安装和恢复记录。** 上方“最新安装包”仍是稳定入口。
+**0.27.0-test.1 现为最新版本，可在应用内更新。但与原发布版本签名不同，旧版（0.26.x 及更早）无法直接覆盖升级：请先备份收藏和进度，再卸载旧版、安装新版后恢复记录。**
 
 已加入选集与推荐分离加载、后续集开头预缓存（关闭/1–3 集，默认 1 集）及独立 Android 4.1–4.4 / API16 兼容构建。预缓存只在非计费网络、当前播放稳定且缓冲充足时启动，低内存设备实际最多 1 集。
 

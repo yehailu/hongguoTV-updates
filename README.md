@@ -14,19 +14,21 @@
 - **个性化**：文字大小、界面风格、自定义背景、手机备份与恢复
 - **应用内更新**：发现新版本时应用内下载并升级
 
-## 安装包（按设备选择）
+## 安装包（按设备选择，共 5 个）
 
-| 安装包 | 适用设备 | 系统要求 |
-|---|---|---|
-| hongguotv-0.XX.X-sw-tv-debug.apk | 电视 / 车机（首选） | Android 8.1+ |
-| hongguotv-0.XX.X-sw-a7-debug.apk | Android 7 的电视 / 车机 | Android 7.0+ |
-| hongguotv-0.XX.X-hw-phone-debug.apk | 手机 / 平板（可转屏） | Android 8.0+ |
-| hongguotv-0.XX.X-a41-debug.apk | Android 4.1–4.4 老设备 | Android 4.1+ |
-| hongguotv-0.XX.X-android5-debug.apk | Android 5 老旧设备 | Android 5.0+ |
+当前发布：前 4 个来自 **0.27.0-test.1 / versionCode 54**，第 5 个是 Android 5 稳定支线 **0.22.15 / versionCode 53**。
 
-## 0.27.0-test.1 测试构建与 Android 4.1 适配
+| 安装包 | 适用设备 | 系统要求 | 作用与特点 |
+|---|---|---|---|
+| hongguotv-0.XX.X-sw-tv-debug.apk | 电视 / 车机（首选） | Android 8.1+ | 软解版：内置 FFmpeg，设备缺 HEVC 硬解也能播，通用性最好 |
+| hongguotv-0.XX.X-sw-a7-debug.apk | Android 7 的电视 / 车机 | Android 7.0+ | 软解版：面向旧系统（API 24），同样带 FFmpeg |
+| hongguotv-0.XX.X-hw-phone-debug.apk | 手机 / 平板 | Android 8.0+ | 硬解版：体积最小，支持横竖屏旋转 |
+| hongguotv-0.XX.X-a41-debug.apk | Android 4.1–4.4 老设备 | Android 4.1+ | 兼容构建：ExoPlayer 2.18.7 + 旧系统适配，不含 FFmpeg 软解 |
+| hongguotv-0.XX.X-android5-debug.apk | Android 5 老旧设备 | Android 5.0+ | 稳定支线（0.22.x）：与主版本并行维护，不含新功能 |
 
-[测试版安装与发布说明](RELEASE_0.27.0_TEST.md) · [测试版入口](https://cnb.cool/lzyr9010/hongguoTV-updates/-/releases/tag/v0.27.0-test.1)
+## 0.27.0-test.1 与 Android 4.1 适配
+
+[安装与发布说明](RELEASE_0.27.0_TEST.md) · [版本入口](https://cnb.cool/lzyr9010/hongguoTV-updates/-/releases/tag/v0.27.0-test.1)
 
 **0.27.0-test.1 现为最新版本，已改用原发布证书签名：老版本（0.26.x 及更早）可直接覆盖安装，也支持应用内更新。**
 
@@ -34,7 +36,11 @@
 
 兼容版不是简单下调 minSdk：使用 ExoPlayer 2.18.7、旧系统 TLS/API/主题/多 dex 适配；不包含 Android 4.0，也不包含 FFmpeg 视频软解，片源能否播放仍取决于设备解码能力。
 
-[策略、构建、验证和安装边界](PERFORMANCE_ANDROID41.md)。测试版增加 `a41` 包，Android 5 稳定支线不改动。
+[策略、构建、验证和安装边界](PERFORMANCE_ANDROID41.md)。本版新增 `a41` 包，Android 5 稳定支线不改动。
+
+## 下一步优化方向
+
+- **基于安卓原生屏幕旋转适配各版本**：改用系统原生的屏幕方向能力来适配横竖屏，让电视、车机、手机各版本在设备旋转时自动切换布局，减少手工区分版本与方向带来的错装和显示问题。
 
 ## 使用
 

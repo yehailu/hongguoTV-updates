@@ -22,9 +22,11 @@
 |---|---|---|---|
 | hongguotv-0.XX.X-sw-tv-debug.apk | 电视 / 车机（首选） | Android 8.1+ | 软解版：内置 FFmpeg，设备缺 HEVC 硬解也能播，通用性最好 |
 | hongguotv-0.XX.X-sw-a7-debug.apk | Android 7 的电视 / 车机 | Android 7.0+ | 软解版：面向旧系统（API 24），同样带 FFmpeg |
-| hongguotv-0.XX.X-hw-phone-debug.apk | 手机 / 平板 | Android 8.0+ | 硬解版：体积最小，支持横竖屏旋转 |
+| hongguotv-0.XX.X-hw-phone-debug.apk | 手机 / 平板 / TV / 车机 | Android 8.0+ | 硬解版：体积最小；按系统原生旋转，不锁横屏，电视与车机也能装，遥控器交互与电视版一致 |
 | hongguotv-0.XX.X-a41-debug.apk | Android 4.1–4.4 老设备 | Android 4.1+ | 兼容构建：ExoPlayer 2.18.7 + 旧系统适配，不含 FFmpeg 软解 |
 | hongguotv-0.XX.X-android5-debug.apk | Android 5 老旧设备 | Android 5.0+ | 稳定支线（0.22.x）：与主版本并行维护，不含新功能 |
+
+`hw-phone` 不锁定屏幕方向，跟随系统原生旋转，手机、平板、电视、车机都可以安装；遥控器操作（方向键、OK、返回、↓ 选集 / ↑ 更多）与电视版完全一致。它只做硬解，若设备缺少 HEVC 硬解能力，请改用 `sw-tv`。
 
 ## 0.27.0-test.1 与 Android 4.1 适配
 
@@ -40,7 +42,16 @@
 
 ## 下一步优化方向
 
-- **基于安卓原生屏幕旋转适配各版本**：改用系统原生的屏幕方向能力来适配横竖屏，让电视、车机、手机各版本在设备旋转时自动切换布局，减少手工区分版本与方向带来的错装和显示问题。
+除了继续维护移动端各安装包，桌面端已由独立项目承接：
+
+**红果TV PC** —— Windows 电脑端短剧播放器，在电脑上浏览、搜索、观看短剧与漫剧，并保留自己的收藏和观看进度。
+
+- 浏览热门、分类与排行榜，搜索剧名、查看简介、按集观看
+- 收藏、观看历史与断点续播，自动连播下一集、一键返回选集
+- 官方弹幕开关、播放器倍速菜单、自定义快捷键、画面大小调节
+- 提供 Windows 10 / 11 64 位安装版与便携版，另有源码包
+
+项目地址：[https://cnb.cool/lzyr9010/hongguoTV-PC](https://cnb.cool/lzyr9010/hongguoTV-PC)
 
 ## 使用
 

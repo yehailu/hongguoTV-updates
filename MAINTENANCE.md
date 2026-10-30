@@ -1,15 +1,15 @@
 # 维护矩阵与发版流程
 
-只维护以下 **4 个包**，其余历史版本（0.17.x–0.24.1、0.22.2 的随机包名变体等）**停止更新**，仅存档。
+正式稳定入口仍维护下列 **4 个包**。本轮另有 [0.27.0-test.1测试发布](RELEASE_0.27.0_TEST.md)，增加Android4.1兼容测试包，但**不设latest、不改动稳定更新入口**。
 
 | # | 包（当前版本） | 变体 ID | 适用 | 解码 | minSdk | 方向 |
 |---|---|---|---|---|---|---|
-| 1 | `hongguotv-0.26.0-sw-tv-debug.apk` | `sw-tv` | 电视 / 车机（含无 HEVC 解码器设备） | 硬解优先 + FFmpeg 软解 | 27（8.1） | 横屏 |
-| 2 | `hongguotv-0.26.0-sw-a7-debug.apk` | `sw-a7` | Android 7 的电视 / 车机 | 同上 | 24（7.0） | 横屏 |
-| 3 | `hongguotv-0.26.0-hw-phone-debug.apk` | `hw-phone` | 手机 / 平板 | 仅硬解（无 FFmpeg） | 26（8.0） | 可横竖屏 |
-| 4 | `hongguotv-0.22.6-android5-debug.apk` | `a5` | Android 5.0–6.0 老设备 | 仅硬解 | 21（5.0） | 横屏 |
+| 1 | `hongguotv-0.26.9-sw-tv-debug.apk` | `sw-tv` | 电视 / 车机（含无 HEVC 解码器设备） | 硬解优先 + FFmpeg 软解 | 27（8.1） | 横屏 |
+| 2 | `hongguotv-0.26.9-sw-a7-debug.apk` | `sw-a7` | Android 7 的电视 / 车机 | 同上 | 24（7.0） | 横屏 |
+| 3 | `hongguotv-0.26.9-hw-phone-debug.apk` | `hw-phone` | 手机 / 平板 | 仅硬解（无 FFmpeg） | 26（8.0） | 可横竖屏 |
+| 4 | `hongguotv-0.22.15-android5-debug.apk` | `a5` | Android 5.0–6.0 老设备 | 仅硬解 | 21（5.0） | 横屏 |
 
-四个包同包名 `com.hongguotv.nativeapp`，**互相覆盖安装**。
+稳定包同包名 `com.hongguotv.nativeapp`，只有**签名一致**才可互相覆盖安装。本轮测试包与原稳定签名不同，不能直接覆盖；需要备份、手动迁移。
 
 ## 应用内更新
 
@@ -22,7 +22,19 @@
 
 设置里有「检查更新」与「自动检查更新」两个开关（自动检查每日最多一次，播放中不弹）。
 
-## 一键发版
+## 本轮测试构建（不发布为latest）
+
+[Python测试构建器](tools/build_test_release.py) 在现有JDK17/SDK/Gradle环境构建sw-tv、sw-a7、hw-phone、a41，逐包校验版本/API下限/签名和哈希，不需要改变全局PowerShell执行策略：
+
+```powershell
+python tools/build_test_release.py --version 0.27.0-test.1 --code 54
+```
+
+公开发布仅使用 `--prerelease --no-latest --target-commit <源码提交SHA>`；原稳定v0.26.9和a5/code53不改变。具体签名迁移和测试覆盖见 [测试发布说明](RELEASE_0.27.0_TEST.md)。
+
+## 历史一键发版脚本（本轮不使用）
+
+下列旧脚本依赖外部旧工程和原签名路径，本机不具备该环境；不得用它将本轮新签名测试包提升为latest。
 
 ```powershell
 # 主线 0.26.0 / code 34，安卓5 支线 0.22.6 / code 35

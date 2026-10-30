@@ -7,6 +7,12 @@ keystore.properties
 build/
 outputs/
 releases/**/*.apk
+releases/v*-test.*/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
 
 # 本机 CNB 推送凭据（仅本地，切勿提交）
 .cnb-credentials

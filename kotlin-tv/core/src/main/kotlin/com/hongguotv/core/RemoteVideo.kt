@@ -35,11 +35,13 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
             }
         } finally { synchronized(calls) { calls-=call } }
     }
-    @Synchronized fun prepare(): RemoteVideo {
+    @Synchronized fun prepare(maxHeaderBytes: Int=8*1024*1024): RemoteVideo {
+        if(closed) throw IOException("播放请求已取消")
         if(::prepared.isInitialized) return this
         val first=range(0,256*1024-1); total=first.total
         prefix=first.bytes
         val end=MediaCrypto.headerEnd(first.bytes,total)
+        if(end>maxHeaderBytes) throw IOException("预缓存索引超过内存预算")
         val header=if(end>first.bytes.size) first.bytes+range(first.bytes.size.toLong(),end-1L).bytes else first.bytes.copyOf(end)
         prepared=MediaCrypto.prepare(header,info.key)
         if(prepared.samples.any { it.end>total }) throw IOException("视频样本超出资源大小")
@@ -47,8 +49,10 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
     }
     /** Bounded warm-up. Retains raw bytes so decryption still uses the absolute sample offset. */
     @Synchronized fun warm(): RemoteVideo {
-        prepare()
+        prepare(maxHeaderBytes=1024*1024)
         val size=minOf(total,1024*1024L).toInt()
+        // Includes conservative object/IV/list overhead, not just the retained MP4 prefix.
+        if(prepared.header.size.toLong()+prepared.samples.size*128L+size>4*1024*1024L) throw IOException("预缓存超过内存预算")
         if(prefix.size<size) prefix=prefix+range(prefix.size.toLong(),size-1L).bytes
         return this
     }

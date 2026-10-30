@@ -2,6 +2,12 @@
 package com.hongguotv.nativeapp
 
 import android.content.Context
+import android.os.Build
+import java.net.InetAddress
+import java.net.Socket
+import java.io.IOException
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import okhttp3.OkHttpClient
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -25,7 +31,10 @@ object TlsSupport {
     private val bundledFiles = listOf(
         "digicert_global_root_g2.pem",
         "digicert_global_root_g3.pem",
-        "digicert_global_root_ca.pem"
+        "digicert_global_root_ca.pem",
+        // Official Let's Encrypt ISRG Root X1. DER SHA256:
+        // 96BCEC06264976F37460779ACF28C5A7CFE8A3C0AAE11A8FFCEE05C0BDDF08C6
+        "isrg_root_x1.pem"
     )
 
     private fun bundledTrustManager(context: Context): X509TrustManager? = runCatching {
@@ -53,7 +62,7 @@ object TlsSupport {
         private val bundled: X509TrustManager?
     ) : X509TrustManager {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
-            system?.checkClientTrusted(chain, authType)
+            (system ?: throw CertificateException("no system client trust manager")).checkClientTrusted(chain, authType)
         }
         override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
             var failure: CertificateException? = null
@@ -77,7 +86,28 @@ object TlsSupport {
         val socketFactory = runCatching {
             SSLContext.getInstance("TLS").apply { init(null, arrayOf(combined), SecureRandom()) }.socketFactory
         }.getOrNull() ?: return builder
-        return builder.sslSocketFactory(socketFactory, combined)
+        // API16~19 providers often support TLS1.2 but leave it disabled by default.
+        // Keep native sockets (and SNI), default hostname verification, and the validated trust manager.
+        val enabledFactory = if (Build.VERSION.SDK_INT in 16..19) Tls12SocketFactory(socketFactory) else socketFactory
+        return builder.sslSocketFactory(enabledFactory, combined)
+    }
+
+    private class Tls12SocketFactory(private val delegate: SSLSocketFactory) : SSLSocketFactory() {
+        private fun enable(socket: Socket): Socket {
+            val tls = socket as? SSLSocket ?: throw IOException("TLS socket unavailable")
+            val protocols = tls.supportedProtocols.filter { it == "TLSv1.2" || it == "TLSv1.3" }
+            if (protocols.isEmpty()) { runCatching { tls.close() }; throw IOException("此设备的安全提供程序不支持 TLS 1.2") }
+            tls.enabledProtocols = protocols.toTypedArray()
+            return tls
+        }
+        override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
+        override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+        override fun createSocket(): Socket = enable(delegate.createSocket())
+        override fun createSocket(socket: Socket, host: String, port: Int, autoClose: Boolean): Socket = enable(delegate.createSocket(socket, host, port, autoClose))
+        override fun createSocket(host: String, port: Int): Socket = enable(delegate.createSocket(host, port))
+        override fun createSocket(host: String, port: Int, local: InetAddress, localPort: Int): Socket = enable(delegate.createSocket(host, port, local, localPort))
+        override fun createSocket(host: InetAddress, port: Int): Socket = enable(delegate.createSocket(host, port))
+        override fun createSocket(host: InetAddress, port: Int, local: InetAddress, localPort: Int): Socket = enable(delegate.createSocket(host, port, local, localPort))
     }
 
     /** True when the failure is a TLS trust problem rather than a plain network error. */

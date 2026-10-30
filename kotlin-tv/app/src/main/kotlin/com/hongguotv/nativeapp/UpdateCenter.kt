@@ -46,6 +46,7 @@ object UpdateCenter {
             probe.newCall(Request.Builder().url(LATEST).build()).execute().use { response ->
                 val location = response.header("Location").orEmpty()
                 Regex("/tag/([^/?#]+)").find(location)?.groupValues?.get(1)
+                    ?.takeIf { it.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,100}")) && !it.contains("..") }
             }
         }.getOrNull()
     }
@@ -54,7 +55,8 @@ object UpdateCenter {
     fun check(client: OkHttpClient, variantId: String, currentCode: Int): Info? {
         val tag = latestTag(client) ?: return null
         val manifest = runCatching {
-            client.newCall(Request.Builder().url("$DOWNLOAD/$tag/update.json").build()).execute().use { response ->
+            client.newBuilder().followSslRedirects(false).build()
+                .newCall(Request.Builder().url("$DOWNLOAD/$tag/update.json").build()).execute().use { response ->
                 if (!response.isSuccessful) return null
                 response.body?.string()
             }
@@ -80,6 +82,7 @@ object UpdateCenter {
         var lastPercent = -1
         val ok = runCatching {
             client.newBuilder()
+                .followSslRedirects(false)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .callTimeout(5, TimeUnit.MINUTES)
                 .build()

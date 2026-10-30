@@ -50,6 +50,9 @@ private fun codecName(raw: String): String = when(raw.trim().lowercase()) {
 
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
+    // Optional recommendations must not occupy a browsing worker for minutes on bad routes.
+    private val recommendationHttp=http.newBuilder().connectTimeout(2,TimeUnit.SECONDS)
+        .readTimeout(3,TimeUnit.SECONDS).callTimeout(4,TimeUnit.SECONDS).build()
     private val site = "https://hongguoduanju.com"
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
@@ -100,35 +103,57 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     fun deviceSnapshot(): Triple<String,String,Map<String,String>> =
         Triple(VendorConstants.installDeviceId,VendorConstants.installIid,registrationCookies)
+
+    /**
+     * A same-session repository using a different transport (for example, bounded speculative work).
+     * Preserve verified registration freshness and cookies without adopting/resetting global device
+     * identity. A cold [restoreDevice] remains unverified and still needs its normal renewal check;
+     * in-flight registration and browsing caches are deliberately not shared.
+     */
+    fun withTransport(http: OkHttpClient): ContentRepository {
+        // Read the timestamp first: concurrent renewal can only make this snapshot conservative.
+        val verifiedAt=registeredAt
+        val cookies=registrationCookies.toMap()
+        val rejected=deviceRejected
+        return ContentRepository(http,clock).also {
+            it.registeredAt=verifiedAt
+            it.registrationCookies=cookies
+            it.deviceRejected=rejected
+        }
+    }
+
     private fun cookieHeader(): String? =
         registrationCookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }.takeIf { it.isNotBlank() }
 
     /** 站点页面与官网 JSON 会偶发「200 + 0 字节」或超时；短退避重试几次再放弃。 */
-    private fun textRetry(url: String, signed: Signer.Request? = null, attempts: Int = 5): String {
+    private fun textRetry(url: String, signed: Signer.Request? = null, attempts: Int = 5, client: OkHttpClient = http): String {
         var last: IOException? = null
         for (attempt in 1..attempts) {
             try {
                 // 第二次起换一条新连接：站点偶发把 keep-alive 连接挂住，重发到同一条连接上只会继续超时。
-                return text(url, signed, freshConnection = attempt > 1)
+                return text(url, signed, freshConnection = attempt > 1, client = client)
             } catch (problem: IOException) {
+                RequestScope.ensureActive()
                 last = problem
-                if (attempt < attempts) runCatching { Thread.sleep(400L * attempt + (0..200).random()) }
+                if (attempt < attempts) RequestScope.pause(400L * attempt + (0..200).random())
             }
         }
         throw last ?: IOException("内容请求失败")
     }
-    private fun text(url: String, signed: Signer.Request? = null, freshConnection: Boolean = false): String {
+    private fun text(url: String, signed: Signer.Request? = null, freshConnection: Boolean = false, client: OkHttpClient = http): String {
+        RequestScope.ensureActive()
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         if (freshConnection) { request.header("Connection","close"); request.header("Cache-Control","no-cache") }
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
         if(signed!=null) cookieHeader()?.let { request.header("Cookie",it) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
-        return RequestScope.execute(http.newCall(request.build())) { response ->
+        return RequestScope.execute(client.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw IOException("内容请求失败（HTTP ${response.code}）")
             val body = response.body ?: throw IOException("内容响应为空")
             if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
             val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
-            while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
+            while(out.size()<=16*1024*1024) { RequestScope.ensureActive(); val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
+            RequestScope.ensureActive()
             if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
             if(bytes.isEmpty()) throw IOException("接口响应为空，请稍后重试")
             String(bytes,Charsets.UTF_8)
@@ -170,7 +195,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         if(genre!=null) return categoryListing("$site/category/${categoryPath(type)}/${genre.slug}"+if(page>1) "?page=$page" else "",page,"题材",genre)
         // 漫剧首页：统一热播榜是混排的，首页「漫剧」货架改用同类型分类目录，内容类型才对；
         // 分类目录失败时再退回榜单。
-        if(type==ContentType.COMIC) return runCatching { categoryListing("$site/category/comic-drama",page,"热门") }
+        if(type==ContentType.COMIC) return runCatching { categoryListing("$site/category/comic-drama"+if(page>1) "?page=$page" else "",page,"热门") }
             .getOrElse { comicRanking(page) }
         return categoryListing("$site/category?tab=1&sort_type=1"+if(page>1) "&page=$page" else "",page,"首页")
     }
@@ -227,8 +252,8 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
      * exists; the site now exposes a JSON endpoint at /api/search/result/ with the same searchList
      * rows (video_data.series_id / series_title / series_cover / genre).
      */
-    private fun webSearch(keyword: String, page: Int, genre: String?): CatalogPage {
-        val data=JSONObject(textRetry("$site/api/search/result/?query=${Signer.encode(keyword)}&page=$page"))
+    private fun webSearch(keyword: String, page: Int, genre: String?, attempts: Int = 5, client: OkHttpClient = http): CatalogPage {
+        val data=JSONObject(textRetry("$site/api/search/result/?query=${Signer.encode(keyword)}&page=$page",attempts=attempts,client=client))
         val rows=data.optJSONArray("searchList") ?: throw IOException("搜索数据暂不可用")
         val mapped=rows.objects().let { list -> if(genre==null) list else list.filter { (it.optJSONObject("video_data") ?: it).optString("genre")==genre } }.map(::card)
         val items=valid(mapped)
@@ -294,37 +319,60 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             (0 until rows.length()).map { rows.optString(it).trim() }.filter { it.isNotEmpty() }.distinct().take(20)
         }.getOrElse { emptyList() }
     }
-    fun detail(id: String): Detail {
+    /** Compatibility API: waits for optional recommendations as well as the playable episode list. */
+    fun detail(id: String): Detail = detailRecommendations(detailFast(id))
+
+    /**
+     * Loads only the series metadata and playable episode ids, without waiting for related-work or
+     * same-name searches. Show this result immediately, then call [detailRecommendations] on a
+     * separate worker inside its own [RequestScope]. Website fallback may include recommendations
+     * already embedded in that response, but never makes another request for them here.
+     */
+    fun detailFast(id: String): Detail {
         require(id.matches(Regex("[0-9]{1,30}")))
-        // 剧集列表优先走 App 详情接口（官网详情页已逐步下线，见 [detailViaApi]），失败再退回官网。
+        RequestScope.ensureActive()
+        // 官网详情页已逐步下线，优先走 App 播放侧详情；失败才回退官网。
         val api=detailViaApi(id)
-        val series: Series; val episodes: List<String>; val html: String?
-        if(api!=null) { series=api.series; episodes=api.episodes; html=null }
-        else {
-            val page=textRetry("$site/detail?series_id=$id"); html=page
-            val loader=extractRouter(page).getJSONObject("loaderData")
-            val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
-            val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
-            episodes=(0 until raw.length()).map { raw.getString(it) }
-            if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
-            series=card(o).copy(id=id)
-        }
-        // 详情页下方「相关作品」：App 接口给得更全（含同 IP、各季），失败再退回官网详情页那一栏。
-        val appRelated=runCatching { relatedWorks(id,series.title) }.getOrDefault(emptyList())
-        // 「其他季」优先从 plan 接口结果里挑（一次拿全，网页搜索只能出前 7 季）；不够再退回网页搜索。
+        RequestScope.ensureActive()
+        if(api!=null) return api
+        val page=textRetry("$site/detail?series_id=$id")
+        val loader=extractRouter(page).getJSONObject("loaderData")
+        val o=loader.optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
+        val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
+        val episodes=(0 until raw.length()).map { raw.getString(it) }
+        if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
+        val series=card(o).copy(id=id)
+        return Detail(series,episodes,related(page,series))
+    }
+
+    /**
+     * Enriches an already loaded detail without re-fetching metadata or episodes. Ordinary optional
+     * API failures leave existing recommendations intact; cancellation is propagated, not converted
+     * to an empty result. Uses at most two 4-second related calls and one 4-second website search,
+     * without retry backoff; normal browsing/playback HTTP timeouts are unchanged. The caller owns
+     * scheduling, scope cancellation and stale-result checks.
+     */
+    fun detailRecommendations(detail: Detail): Detail {
+        val series=detail.series; val id=series.id
+        require(id.matches(Regex("[0-9]{1,30}")))
+        RequestScope.ensureActive()
+        // 详情页下方「相关作品」：App 接口给得更全（含同 IP、各季）。
+        val appRelated=runCatching { relatedWorks(id,series.title,DETAIL_RELATED_ATTEMPTS,recommendationHttp) }.getOrDefault(emptyList())
+        RequestScope.ensureActive()
+        // 「其他季」优先从 plan 接口结果里挑，不够再退回网页搜索。
         val base=baseName(series.title)
         val planSeasons=appRelated.filter { base.isNotBlank() && baseName(it.title)==base && it.id!=id }
             .sortedBy { seasonNumber(it.title) }
-        val sameNameList=if(planSeasons.size>=2) planSeasons else sameName(series)
-        // App 接口偶尔只回 1~2 条（线路半通），少于 3 条时仍用官网详情页那一栏，避免推荐栏突然变空。
-        val relatedAll=when {
-            appRelated.size>=3 -> appRelated
-            html!=null -> related(html,series)
-            else -> appRelated
+        val sameNameList=if(planSeasons.size>=2) planSeasons else {
+            val fallback=sameName(series).ifEmpty { detail.sameName }
+            (planSeasons+fallback).distinctBy { it.id }.sortedBy { seasonNumber(it.title) }
         }
-        return Detail(series,episodes,relatedAll,sameNameList)
+        // App 接口偶尔只回 1~2 条，保留基础详情中已有的官网推荐，避免推荐栏突然变空。
+        val relatedAll=if(appRelated.size>=3 || detail.related.isEmpty()) appRelated else detail.related
+        RequestScope.ensureActive()
+        return detail.copy(related=relatedAll,sameName=sameNameList)
     }
-    /** 剧集详情（简介 + 分集列表）走 App 播放侧接口：POST /novel/player/video_detail/v1/，body {"series_id":"<id>"}。 */
+    /** 剧集详情（简介 + 分集列表）走 App 播放侧接口：POST /novel/player/video_detail/v1/?series_id=<id>，body {}。 */
     private fun detailViaApi(id: String): Detail? = runCatching {
         registerDeviceIfNeeded()
         val values=VendorConstants.device.toMutableMap()
@@ -353,7 +401,8 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     // website for the season-independent base title and keeping every entry that shares that base name.
     private fun sameName(current: Series): List<Series> {
         val base=baseName(current.title); if(base.isBlank()) return emptyList()
-        val page=runCatching { webSearch(base,1,null) }.getOrNull() ?: return emptyList()
+        val page=runCatching { webSearch(base,1,null,attempts=1,client=recommendationHttp) }.getOrElse { RequestScope.ensureActive(); return emptyList() }
+        RequestScope.ensureActive()
         return page.items.filter { it.id!=current.id && baseName(it.title)==base }
             .distinctBy { it.id }.sortedBy { seasonNumber(it.title) }.take(12)
     }
@@ -460,9 +509,11 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
      * 「相关作品」：App 详情页下方那一栏（`show_type=547`），一次请求拿全。
      * 接口对部分线路回空响应是常态，六条线路轮询、最多试 8 次。
      */
-    fun relatedWorks(id: String, title: String): List<Series> {
+    fun relatedWorks(id: String, title: String): List<Series> = relatedWorks(id,title,RELATED_ATTEMPTS,http)
+
+    private fun relatedWorks(id: String, title: String, attempts: Int, client: OkHttpClient): List<Series> {
         require(id.matches(Regex("[0-9]{1,30}")))
-        val rows=relatedRows(id)
+        val rows=relatedRows(id,attempts,client)
         if(rows.isEmpty()) return emptyList()
         val current=baseName(title)
         val seasons=rows.filter { it.id!=id && (current.isBlank() || baseName(it.title)==current) }
@@ -470,9 +521,10 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val seasonIds=seasons.map { it.id }.toSet()
         return (seasons+rows.filter { it.id!=id && it.id !in seasonIds }).distinctBy { it.id }
     }
-    private fun relatedRows(id: String): List<Series> {
+    private fun relatedRows(id: String, attempts: Int, client: OkHttpClient): List<Series> {
         var failure: IOException?=null
-        for(attempt in 0 until RELATED_ATTEMPTS) {
+        for(attempt in 0 until attempts) {
+            RequestScope.ensureActive()
             val host=RELATED_HOSTS[attempt % RELATED_HOSTS.size]
             val values=VendorConstants.device.toMutableMap()
             values.putAll(linkedMapOf(
@@ -485,12 +537,13 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
             ))
             val result=runCatching {
                 val signed=signer.sign("https://$host/reading/bookapi/plan/v:version/",values)
-                val raw=text(signed.url,signed)
+                val raw=text(signed.url,signed,client=client)
                 if(raw.isBlank()) throw IOException("相关作品接口暂无响应")
                 val data=JSONObject(raw)
                 if(data.optInt("code",-1)!=0) throw IOException("相关作品接口暂不可用（${data.optInt("code")}）")
                 parseRelatedCells(data)
             }
+            RequestScope.ensureActive()
             val rows=result.getOrNull().orEmpty()
             if(rows.isNotEmpty()) return rows
             failure=result.exceptionOrNull() as? IOException
@@ -580,6 +633,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         private const val COMIC_WEB_GENRE="205"
         private const val REGISTER_TTL_MS = 30L * 60 * 1000L
         private const val RELATED_CELL_SHOW_TYPE=547
+        private const val DETAIL_RELATED_ATTEMPTS=2
         private const val RELATED_ATTEMPTS=8
         private val RELATED_HOSTS=listOf(
             "api5-normal-hl.fqnovel.com","api5-normal-lf.fqnovel.com","api5-normal-sinfonlinec.fqnovel.com",

@@ -62,12 +62,18 @@ class MainActivity: Activity() {
     private val danmakuRepo by lazy { DanmakuRepository(repository.http) }
     private val networkCleanup=Executors.newSingleThreadExecutor()
     private val prefetchWorker=Executors.newSingleThreadExecutor()
-    private var prefetchHttp: okhttp3.OkHttpClient?=null
     private var playbackHttp: okhttp3.OkHttpClient?=null
-    private val preparedNext=PreparedSlot<RemoteVideo>({ android.os.SystemClock.elapsedRealtime() })
+    private val retiredPlayback=mutableSetOf<Pair<RemoteVideo?,okhttp3.OkHttpClient?>>()
+    private inner class WarmEpisode(val remote: RemoteVideo,val http: okhttp3.OkHttpClient): java.io.Closeable {
+        override fun close() { remote.close(); closeTransport(http) }
+    }
+    private val preparedNext=PreparedEpisodes<WarmEpisode>({ android.os.SystemClock.elapsedRealtime() })
     private var prefetchJob: java.util.concurrent.Future<*>?=null
     private var prefetchScope: RequestScope?=null
     private var prefetchedFor=""
+    private val prefetchAttempts=mutableMapOf<String,Pair<Int,Long>>()
+    private val lowMemory by lazy { (getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).memoryClass<=128 }
+    private var stablePlaybackSince=0L
     private var readySince=0L
     private lateinit var artwork: ArtworkLoader
     private data class DeferredUi(val apply: ()->Unit,val discard: ()->Unit={})
@@ -94,8 +100,6 @@ class MainActivity: Activity() {
     private var homePosition: HomeScreen.Position?=null
     private var catalogPageKey=""
     private val scrollPositions=mutableMapOf<String,Int>()
-    private var prefetchAttemptAt=0L
-    private var prefetchAttempts=0
     private var homeScreen: HomeScreen?=null
     private var pageHeader: LinearLayout?=null
     private var headerCollapsed=false
@@ -146,6 +150,9 @@ class MainActivity: Activity() {
     private var sleepStopped=false
     private var playerView: PlayerView?=null
     private var danmakuView: DanmakuView?=null
+    private val danmakuWorker=Executors.newSingleThreadExecutor()
+    private var danmakuScope: RequestScope?=null
+    private var danmakuJob: java.util.concurrent.Future<*>?=null
     private var danmakuLoader: DanmakuLoader?=null
     private lateinit var favoriteMonitor: FavoriteMonitor
     private val favoriteBadges=mutableMapOf<String,TextView>()
@@ -174,8 +181,8 @@ class MainActivity: Activity() {
     private var networkRegistered=false
     private val networkCallback=object: ConnectivityManager.NetworkCallback() {
         private fun changed() { main.post { if(connectivity.isActiveNetworkMetered || !networkAvailable()) cancelPrefetch(); if(foreground && screen=="player" && playError && autoRecovery) scheduleRecovery() } }
-        override fun onAvailable(network: Network) { changed() }
-        override fun onLost(network: Network) { changed() }
+        override fun onAvailable(network: Network) { main.post { cancelPrefetch() }; changed() }
+        override fun onLost(network: Network) { main.post { cancelPrefetch() }; changed() }
         override fun onCapabilitiesChanged(network: Network,capabilities: NetworkCapabilities) { changed() }
         override fun onBlockedStatusChanged(network: Network,blocked: Boolean) { changed() }
     }
@@ -235,6 +242,14 @@ class MainActivity: Activity() {
     private var suggestTicket=0
     private val pendingSuggest=Runnable { fetchSuggest() }
     private var historyManage: View?=null
+    private val recommendationWorker=Executors.newSingleThreadExecutor()
+    private var recommendationScope: RequestScope?=null
+    private var recommendationJob: java.util.concurrent.Future<*>?=null
+    private var recommendationRevision=0L
+    private var recommendationsLoaded=false
+    private var detailExtrasRenderer: ((Detail)->Unit)?=null
+    private var detailStarted=0L
+    private var detailContentLogged=false
     private var detail: Detail?=null
     private var episodeIndex=0
     private var group=0
@@ -261,8 +276,9 @@ class MainActivity: Activity() {
             if(screen=="player") {
                 if(sleepTimer.poll()) stopForSleep()
                 if(hud.visibility==View.VISIBLE) updatePlaybackText()
-                danmakuLoader?.let { loader -> if(player?.isPlaying==true) { val position=currentPosition(); io.execute { runCatching { loader.loadUpTo(position) } } } }
+                danmakuLoader?.let { loader -> if(player?.isPlaying==true) loadDanmaku(loader,currentPosition()) }
                 maybePrefetch()
+                if(player?.isPlaying==true && stablePlaybackSince>0 && android.os.SystemClock.elapsedRealtime()-stablePlaybackSince>=8000 && (player!!.bufferedPosition-player!!.currentPosition)>=10000 && prefetchJob?.isDone!=false) loadRecommendations()
                 val p=player; val data=detail
                 if(p!=null && data!=null && playbackReady && !playError && outroSkipSeconds>0 && !outroTriggered && p.isPlaying) {
                     val remaining=p.duration-p.currentPosition
@@ -404,7 +420,7 @@ class MainActivity: Activity() {
         (io as? java.util.concurrent.ThreadPoolExecutor)?.purge()
     }
     private fun invalidatePage() {
-        generation++; cancelWork(); artwork.cancelPage()
+        generation++; cancelWork(); artwork.cancelPage(); detailExtrasRenderer=null
     }
     private fun releaseCatalogViews() {
         homeScreen?.let { homePosition=it.capturePosition() }
@@ -485,6 +501,7 @@ class MainActivity: Activity() {
         else -> if(tab==3) library.favorites().filter { favoriteGroupFilter==null || library.groupOf(it.id)==favoriteGroupFilter } else library.history().map { it.series }
     }
     private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false,focusFilter: Boolean=false,focusSearch: Boolean=false) {
+        cancelRecommendations()
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null
         // Never cache a new page number with the previous page's results while a request is pending.
         if(load) {
@@ -1188,6 +1205,8 @@ class MainActivity: Activity() {
             library.autoNext=!library.autoNext
             autoNextButton.text="自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}"
         }
+        lateinit var prefetchButton: TextView
+        prefetchButton=setting(playback,prefetchLabel()) { showPrefetchPicker(prefetchButton) }
         lateinit var autoSeasonButton: TextView
         autoSeasonButton=setting(playback,"系列剧连播  ·  ${if(library.autoSeason) "开启" else "关闭"}") {
             library.autoSeason=!library.autoSeason
@@ -1287,7 +1306,7 @@ class MainActivity: Activity() {
             setOnFocusChangeListener { _,focused -> setTextColor(if(focused) accent else muted) }
         }
         rechainSettings={
-            val left=listOf(qualityButton,defaultSpeed,frame,codecInfo,autoNextButton,autoSeasonButton)
+            val left=listOf(qualityButton,defaultSpeed,frame,codecInfo,autoNextButton,prefetchButton,autoSeasonButton)
             val middle=listOf(danmakuButton)+(if(library.danmaku) danmakuPrefRows else emptyList())
             val right=listOf(themeButton,fontSizeButton,updateButton,autoUpdateButton,backdropButton,backup,hidden,clearCache,license)
             val columns=listOf(left,middle,right)
@@ -1596,10 +1615,12 @@ class MainActivity: Activity() {
         })
     }
     private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true) {
+        cancelRecommendations(); recommendationsLoaded=false
+        detailStarted=android.os.SystemClock.elapsedRealtime(); detailContentLogged=false
         pendingDetail=series; detailAutoplay=autoplay
         invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false
         val body=base(series.title); message(body,"正在加载剧集…")
-        work({ repository.detail(series.id) }, { result ->
+        work({ repository.detailFast(series.id) }, { result ->
             detail=result; library.observeFavorite(series.id,result.episodes.size,System.currentTimeMillis(),acknowledge=true)
             val progress=library.progress(series.id)
             val target=ResumePlayback.target(result.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
@@ -1642,19 +1663,29 @@ class MainActivity: Activity() {
         }
         content.addView(hero)
         // Folding seasons in the grids needs a way back into the other seasons; this is it.
-        val seasons=Seasons.siblings(data.series,data.sameName)
-        if(seasons.size>1) {
-            val seasonScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
-            val seasonRow=row().apply { setPadding(0,dp(2),0,dp(6)) }
-            seasonRow.addView(text("本系列共 ${seasons.size} 季",12f,muted).apply { setPadding(dp(2),dp(10),dp(12),0) })
-            seasons.forEach { season ->
-                addButton(seasonRow,"第 ${Seasons.number(season.title)} 季",season.id==data.series.id) {
-                    if(season.id!=data.series.id) openDetail(season)
+        val seasonHost=column(); content.addView(seasonHost)
+        var renderedSeasons: List<Pair<String,String>>?=null
+        fun updateSeasons(enriched: Detail) {
+            val seasons=Seasons.siblings(enriched.series,enriched.sameName)
+            val signature=seasons.map { it.id to it.title }
+            if(signature==renderedSeasons) return
+            val focused=seasonHost.findFocus()?.tag as? String
+            renderedSeasons=signature; seasonHost.removeAllViews()
+            if(seasons.size>1) {
+                val seasonScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
+                val seasonRow=row().apply { setPadding(0,dp(2),0,dp(6)) }
+                seasonRow.addView(text("本系列共 ${seasons.size} 季",12f,muted).apply { setPadding(dp(2),dp(10),dp(12),0) })
+                seasons.forEach { season ->
+                    addButton(seasonRow,"第 ${Seasons.number(season.title)} 季",season.id==data.series.id) {
+                        if(season.id!=data.series.id) openDetail(season)
+                    }.tag=season.id
                 }
+                seasonScroll.addView(seasonRow)
+                seasonHost.addView(seasonScroll,lp(-1,-2))
+                if(focused!=null) seasonHost.findViewWithTag<View>(focused)?.requestFocus()
             }
-            seasonScroll.addView(seasonRow)
-            content.addView(seasonScroll,lp(-1,-2))
         }
+        updateSeasons(data)
         val groupRow=row(); groupRow.setPadding(0,dp(3),0,dp(5))
         val maxGroup=data.episodes.lastIndex/20; group=group.coerceIn(0,maxGroup)
         val previous=addButton(groupRow,"‹ 上一组") { if(group>0) { group--; showDetail(true) } }.apply { isEnabled=group>0; isFocusable=group>0; alpha=if(group>0) 1f else .4f }
@@ -1677,6 +1708,7 @@ class MainActivity: Activity() {
             content.addView(line,lp(-1,dp(49)))
         }
         val extraRows=mutableListOf<MutableList<View>>()
+        val extras=column(); content.addView(extras)
         fun recommendationRow(title: String,items: List<Series>) {
             if(items.isEmpty()) return
             val section=column()
@@ -1691,7 +1723,7 @@ class MainActivity: Activity() {
             val posterHeight=((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()
             val cards=mutableListOf<View>()
             items.take(12).forEach { series ->
-                val card=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; id=View.generateViewId(); isFocusable=true; isFocusableInTouchMode=true; setPadding(dp(4),dp(4),dp(4),dp(8)); background=TvStyle.card(this@MainActivity,false); contentDescription="$title，${series.title}" }
+                val card=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; id=View.generateViewId(); isFocusable=true; isFocusableInTouchMode=true; setPadding(dp(4),dp(4),dp(4),dp(8)); background=TvStyle.card(this@MainActivity,false); contentDescription="$title，${series.title}"; tag="$title:${series.id}" }
                 val image=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
                 card.addView(image,lp(-1,posterHeight))
                 card.addView(text(series.title,14f).apply { minLines=2; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(5),dp(3),0) })
@@ -1703,11 +1735,19 @@ class MainActivity: Activity() {
                 cards+=card
             }
             horizontal.addView(line); section.addView(horizontal)
-            content.addView(section,lp(-1,-2).apply { topMargin=dp(4) })
+            extras.addView(section,lp(-1,-2).apply { topMargin=dp(4) })
             extraRows+=cards
         }
-        recommendationRow("系列剧推荐",data.sameName)
-        recommendationRow("相关推荐",data.related)
+        var renderedRecommendations: Pair<List<Series>,List<Series>>?=null
+        fun updateExtras(enriched: Detail) {
+        updateSeasons(enriched)
+        val signature=enriched.sameName to enriched.related
+        if(signature==renderedRecommendations) return
+        renderedRecommendations=signature
+        val focused=extras.findFocus()?.tag as? String
+        extras.removeAllViews(); extraRows.clear()
+        recommendationRow("系列剧推荐",enriched.sameName)
+        recommendationRow("相关推荐",enriched.related)
         val lastRowStart=((episodes.size-1)/10)*10
         val firstRow=extraRows.firstOrNull()
         episodes.forEachIndexed { i,v ->
@@ -1729,10 +1769,41 @@ class MainActivity: Activity() {
                 v.nextFocusDownId=if(rowIndex<extraRows.lastIndex) extraRows[rowIndex+1].getOrNull(i.coerceAtMost(extraRows[rowIndex+1].lastIndex))?.id ?: v.id else v.id
             }
         }
+        if(focused!=null) (extras.findViewWithTag<View>(focused) ?: episodes.getOrNull((episodeIndex-group*20).coerceAtLeast(0)) ?: play).requestFocus()
+        }
+        updateExtras(data)
+        detailExtrasRenderer={ enriched -> updateExtras(enriched) }
         if(focusEpisode) episodes.getOrNull((episodeIndex-group*20).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
+        if(!detailContentLogged) {
+            detailContentLogged=true
+            body.post { if(screen=="detail" && detail?.series?.id==data.series.id) android.util.Log.i("HongguoTV","Episode page interactive episodes=${data.episodes.size} elapsedMs=${android.os.SystemClock.elapsedRealtime()-detailStarted}") }
+        }
+        main.postDelayed({ if(foreground && screen=="detail" && detail?.series?.id==data.series.id) loadRecommendations() },350)
+    }
+    private fun cancelRecommendations() {
+        recommendationRevision++; recommendationScope?.cancel(); recommendationScope=null
+        recommendationJob?.cancel(true); recommendationJob=null
+        (recommendationWorker as? java.util.concurrent.ThreadPoolExecutor)?.purge()
+    }
+    private fun loadRecommendations() {
+        val data=detail ?: return
+        if(!foreground || !networkAvailable() || recommendationsLoaded || recommendationJob?.isDone==false) return
+        val token=++recommendationRevision; val scope=RequestScope(); recommendationScope=scope
+        recommendationJob=recommendationWorker.submit {
+            val result=runCatching { scope.run { repository.detailRecommendations(data) } }
+            main.post {
+                if(token!=recommendationRevision || !foreground || detail?.series?.id!=data.series.id) return@post
+                recommendationScope=null; recommendationJob=null; recommendationsLoaded=true
+                result.onSuccess { enriched ->
+                    detail=enriched
+                    if(screen=="detail") detailExtrasRenderer?.invoke(enriched)
+                }
+            }
+        }
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
         val data=detail ?: return
+        cancelRecommendations()
         val playbackStarted=android.os.SystemClock.elapsedRealtime()
         val reuse=screen=="player" && player!=null && playerView!=null && !recovering && !playError
         // Auto-next / episode switch while the player is already up: swap the source in place
@@ -1740,13 +1811,15 @@ class MainActivity: Activity() {
         val seamless=reuse && position==0L
         val staleVideo=if(reuse) video else null
         val staleHttp=if(reuse) playbackHttp else null
+        if(staleVideo!=null || staleHttp!=null) retiredPlayback+=staleVideo to staleHttp
         library.setWatched(data.series.id,false)
         val selectedIndex=index.coerceIn(0,data.episodes.lastIndex)
-        val prefetched=if(position==0L && !recovering) preparedNext.take("${data.episodes[selectedIndex]}:${library.maxQuality}") else null
-        val claimedHttp=if(prefetched!=null) prefetchHttp.also { prefetchHttp=null } else null
+        val warmed=if(position==0L && !recovering) preparedNext.take(streamKey(data.episodes[selectedIndex])) else null
+        val prefetched=warmed?.remote
+        val claimedHttp=warmed?.http
         saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews(); stopDanmaku()
         if(reuse) {
-            cancelRecovery(); cancelPrefetch(); tvTools.close()
+            cancelRecovery(); cancelPrefetchWork(); tvTools.close()
             episodePanel?.dismiss(); episodePanel=null; speedDialog?.dismiss(); speedDialog=null
             playerListener?.let { player?.removeListener(it) }; playerListener=null
             // Deliberately no stop()/clearMediaItems(): the old source keeps the last frame on
@@ -1765,7 +1838,9 @@ class MainActivity: Activity() {
         screen="player"; episodeIndex=selectedIndex; group=episodeIndex/20
         panel=false; playError=false; playbackReady=false; quality=""; pausedForLifecycle=!autoplay
         player?.playWhenReady=requestedAutoplay
-        prefetchAttempts=0; prefetchAttemptAt=0
+        stablePlaybackSince=0
+        val useful=prefetchKeys(data,selectedIndex).toSet()
+        preparedNext.retain(useful); prefetchAttempts.keys.retainAll(useful)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if(!reuse) {
             root.removeAllViews(); root.setBackgroundColor(Color.BLACK)
@@ -1798,8 +1873,10 @@ class MainActivity: Activity() {
         playbackText.text="正在获取播放地址…"; seekBar.positionMs=0; seekBar.durationMs=0; seekBar.visibility=View.VISIBLE; hidePlaybackOverlay()
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
-        val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
-        work({ prefetched ?: RemoteVideo(repository.http,repository.stream(requestedId,maxQuality)).prepare() }, { remote ->
+        val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val codecs=streamCodecs(); val ticket=generation
+        work({ prefetched ?: RemoteVideo(repository.http,repository.stream(requestedId,maxQuality,codecs)).let { remote ->
+            try { remote.prepare() } catch(problem: Exception) { remote.close(); throw problem }
+        } }, { remote ->
             video=remote; quality=remote.info.quality; videoCodec=remote.info.codec
             val p=player ?: run {
                 val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,500,1000).setTargetBufferBytes(12*1024*1024).build()
@@ -1815,6 +1892,7 @@ class MainActivity: Activity() {
                 private fun active()=player===p && generation==ticket && p.currentMediaItem?.mediaId==requestedId
                 override fun onPlaybackStateChanged(state: Int) {
                     if(!active()) return
+                    if(state==Player.STATE_BUFFERING) { stablePlaybackSince=0; cancelPrefetchWork(); cancelRecommendations(); cancelDanmakuWork() }
                     if(state==Player.STATE_READY) {
                         if(!p.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) {
                             playerFailure(PlaybackException("资源没有可解码的视频轨道",null,PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED))
@@ -1840,7 +1918,7 @@ class MainActivity: Activity() {
                         android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
                     }
                 }
-                override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); syncMediaSession() } }
+                override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(!playing) { stablePlaybackSince=0; cancelPrefetchWork(); cancelRecommendations() }; if(hud.visibility==View.VISIBLE) showHud(); syncMediaSession() } }
                 override fun onPlaybackParametersChanged(parameters: PlaybackParameters) { if(active()) syncMediaSession() }
                 override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) { if(active()) { syncMediaSession(); danmakuView?.seekTo(newPosition.positionMs) } }
                 override fun onPlayerError(error: PlaybackException) { if(active()) playerFailure(error) }
@@ -1849,7 +1927,8 @@ class MainActivity: Activity() {
             val source=ProgressiveMediaSource.Factory { VideoDataSource(remote) }.createMediaSource(MediaItem.Builder().setMediaId(requestedId).setUri("hongguotv://episode/$requestedId").setMimeType(MimeTypes.VIDEO_MP4).build())
             val introSkip=if(position<=0 && (skipMark?.introSeconds ?: 0)>0) skipMark!!.introSeconds*1000L else position.coerceAtLeast(0)
             p.setMediaSource(source); p.seekTo(introSkip); p.prepare(); p.playWhenReady=foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null
-            if(staleVideo!=null || staleHttp!=null) main.postDelayed({ staleVideo?.close(); closeTransport(staleHttp) },1500)
+            val retiring=retiredPlayback.toSet()
+            if(retiring.isNotEmpty()) main.postDelayed({ releaseRetiredPlayback(retiring) },1500)
             if(introSkip>0 && position<=0) Toast.makeText(this,"已跳过片头 ${skipMark!!.introSeconds} 秒",Toast.LENGTH_SHORT).show()
         }, { problem -> playerFailure(problem) })
     }
@@ -1875,41 +1954,73 @@ class MainActivity: Activity() {
             }
         }
     }
+    private fun releaseRetiredPlayback(items: Set<Pair<RemoteVideo?,okhttp3.OkHttpClient?>> = retiredPlayback.toSet()) {
+        items.forEach { old -> if(retiredPlayback.remove(old)) { old.first?.close(); closeTransport(old.second) } }
+    }
     private fun closeTransport(http: okhttp3.OkHttpClient?) {
         if(http==null) return
         // Closing an idle TLS connection can write close_notify; keep it off the UI thread.
-        networkCleanup.execute { http.dispatcher.cancelAll(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+        val cleanup=Runnable { http.dispatcher.cancelAll(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+        try { networkCleanup.execute(cleanup) } catch(_: java.util.concurrent.RejectedExecutionException) { Thread(cleanup,"hongguotv-prefetch-cleanup").start() }
+    }
+    private fun cancelPrefetchWork() {
+        prefetchScope?.cancel(); prefetchScope=null
+        prefetchJob?.cancel(true); prefetchJob=null
+        preparedNext.abortPending(prefetchedFor); prefetchedFor=""
+        (prefetchWorker as? java.util.concurrent.ThreadPoolExecutor)?.purge()
     }
     private fun cancelPrefetch() {
-        prefetchScope?.cancel(); prefetchScope=null
-        preparedNext.clear(); prefetchJob?.cancel(true); prefetchJob=null
-        closeTransport(prefetchHttp); prefetchHttp=null; prefetchedFor=""
+        cancelPrefetchWork(); preparedNext.clear(); prefetchAttempts.clear()
     }
+    private fun streamCodecs(): Set<String> = if(library.avcOnly) setOf("avc")
+        else if(DecodeSupport.softwareAvailable) emptySet() else deviceCodecs.ifEmpty { setOf("avc") }
+    private fun prefetchKeys(data: Detail,index: Int): List<String> {
+        val count=PrefetchPolicy.effectiveCount(library.prefetchCount,lowMemory)
+        val codecs=streamCodecs().sorted().joinToString(",")
+        return ((index+1)..minOf(index+count,data.episodes.lastIndex)).map { "${data.episodes[it]}:${library.maxQuality}:$codecs" }
+    }
+    private fun streamKey(id: String)="$id:${library.maxQuality}:${streamCodecs().sorted().joinToString(",")}"
     private fun maybePrefetch() {
         val p=player ?: return; val data=detail ?: return
-        if(!foreground || !p.isPlaying || !library.autoNext || playError || sleepStopped || episodeIndex>=data.episodes.lastIndex) return
-        if(!PrefetchPolicy.nearEnd(p.currentPosition,p.duration,p.playbackParameters.speed)) return
-        val id=data.episodes[episodeIndex+1]; val quality=library.maxQuality; val key="$id:$quality"
-        if(preparedNext.isFresh(key) || prefetchJob?.isDone==false) return
         val now=android.os.SystemClock.elapsedRealtime()
-        if(readySince==0L || now-readySince<3000 || p.bufferedPosition-p.currentPosition<5000) return
-        if(prefetchAttempts>=3 || (prefetchAttempts>0 && now-prefetchAttemptAt<15_000) || connectivity.isActiveNetworkMetered || !networkAvailable()) return
-        cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
-        val ticket=preparedNext.begin(key)
-        val http=TlsSupport.client(
-            okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS),
-            this
-        ).build()
-        val source=ContentRepository(http); prefetchHttp=http
+        if(p.isPlaying && p.playbackState==Player.STATE_READY) { if(stablePlaybackSince==0L) stablePlaybackSince=now } else stablePlaybackSince=0
+        preparedNext.expire()
+        if(!foreground || library.prefetchCount==0 || playError || sleepStopped || !networkAvailable() || connectivity.isActiveNetworkMetered) { cancelPrefetch(); return }
+        if(!p.isPlaying || p.playbackState!=Player.STATE_READY) { stablePlaybackSince=0; cancelPrefetchWork(); return }
+        val eligible=PrefetchPolicy.canStart(p.currentPosition,p.duration,p.playbackParameters.speed,now-stablePlaybackSince,p.bufferedPosition-p.currentPosition)
+        if(!eligible) { cancelPrefetchWork(); return }
+        val keys=prefetchKeys(data,episodeIndex)
+        preparedNext.retain(keys.toSet()); prefetchAttempts.keys.retainAll(keys.toSet())
+        if(prefetchJob?.isDone==false) return
+        prefetchJob=null; prefetchScope=null; prefetchedFor=""
+        val key=keys.firstOrNull { !preparedNext.isFresh(it) && (prefetchAttempts[it]?.let { attempt -> attempt.first<3 && now-attempt.second>=15_000 } ?: true) } ?: return
+        val ticket=preparedNext.begin(key) ?: return
+        prefetchedFor=key
+        prefetchAttempts[key]=(prefetchAttempts[key]?.first ?: 0)+1 to now
+        val id=key.substringBefore(':'); val quality=library.maxQuality; val codecs=streamCodecs()
         val scope=RequestScope(); prefetchScope=scope
+        val deadline=Runnable { if(prefetchScope===scope) cancelPrefetchWork() }
+        main.postDelayed(deadline,15_000)
         prefetchJob=prefetchWorker.submit {
-            var remote: RemoteVideo?=null
+            var warm: WarmEpisode?=null
+            var http: okhttp3.OkHttpClient?=null
             try {
+                val transport=TlsSupport.client(
+                    okhttp3.OkHttpClient.Builder().connectTimeout(5,java.util.concurrent.TimeUnit.SECONDS).readTimeout(8,java.util.concurrent.TimeUnit.SECONDS).callTimeout(12,java.util.concurrent.TimeUnit.SECONDS),this
+                ).build(); http=transport
+                val source=repository.withTransport(transport)
                 val prepared=scope.run {
-                    RemoteVideo(http,source.stream(id,quality)).also { remote=it; it.warm() }
+                    RemoteVideo(transport,source.stream(id,quality,codecs)).also { warm=WarmEpisode(it,transport); it.warm() }
+                    checkNotNull(warm)
                 }
-                if(preparedNext.complete(ticket,key,prepared)) android.util.Log.i("HongguoTV","Next episode prepared near end")
-            } catch(_: Exception) { remote?.close() }
+                if(preparedNext.complete(ticket,key,prepared)) {
+                    warm=null; http=null
+                    android.util.Log.i("HongguoTV","Prefetch prepared episode=${data.episodes.indexOf(id)+1} count=${keys.size}")
+                } else { warm=null; http=null } // rejected completions close their own transport
+            } catch(_: Exception) {
+                if(warm!=null) warm?.close() else closeTransport(http)
+                preparedNext.abortPending(key,ticket)
+            } finally { main.removeCallbacks(deadline) }
         }
     }
     private fun networkAvailable(): Boolean {
@@ -1929,7 +2040,7 @@ class MainActivity: Activity() {
     }
     private fun playerFailure(problem: Throwable) {
         val failedCodec=problem is PlaybackException && problem.errorCode in 3000..4999
-        if(failedCodec && !softRetryUsed) {
+        if(failedCodec && DecodeSupport.softwareAvailable && !softRetryUsed) {
             // The platform decoder cannot handle this stream: rebuild with FFmpeg software decoding.
             softRetryUsed=true; softDecodeForced=true
             val position=currentPosition().coerceAtLeast(0)
@@ -1939,7 +2050,8 @@ class MainActivity: Activity() {
             return
         }
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
-        saveProgress(); cancelRecovery(); cancelPrefetch()
+        saveProgress(); cancelRecovery(); cancelPrefetch(); cancelRecommendations()
+        player?.stop(); releaseRetiredPlayback()
         playError=true; player?.pause(); seekBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
@@ -1947,14 +2059,15 @@ class MainActivity: Activity() {
             "证书校验失败，无法取流。请检查设备系统时间是否正确；本版已内置常用根证书，仍失败可换网络再试。"
         } else if(decoding) {
             val codec=when(videoCodec) { "hevc" -> "HEVC/H.265"; "av1" -> "AV1"; "avc" -> "H.264"; "vp9" -> "VP9"; "" -> "未知"; else -> videoCodec }
-            "本机硬件解码器不支持 $codec，已尝试切换 FFmpeg 软件解码。"
+            if(DecodeSupport.softwareAvailable) "本机硬件解码器不支持 $codec，已尝试切换 FFmpeg 软件解码。"
+            else "本机解码器不支持 $codec。本版仅硬件解码，可尝试较低清晰度或其他 H.264 片源。"
         } else "播放失败，可重试或切换清晰度。"
         val actions=row(); controls.addView(actions)
         // Failure screen gets one primary action instead of three look-alike buttons.
         val retryNow=primaryButton("立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }
         actions.addView(retryNow,lp(-2,dp(44)).apply { rightMargin=dp(10) })
         retryNow.requestFocus()
-        if(decoding) addButton(actions,"软解重试") {
+        if(decoding && DecodeSupport.softwareAvailable) addButton(actions,"软解重试") {
             softDecodeForced=true; softRetryUsed=true
             playEpisode(episodeIndex,retryPosition,retryAutoplay)
         } else addButton(actions,"尝试 720P") { library.maxQuality=720; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
@@ -2346,6 +2459,7 @@ class MainActivity: Activity() {
             tvTools.choose("播放设置",buildList {
                 add("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}"); add("清晰度 ${library.maxQuality}P"); add("画面 ${library.frameMode.label}"); add("定时 ${sleepTimer.label()}")
                 add("跳过片头 ${skipLabel(mark?.introSeconds ?: 0)}"); add("跳过片尾 ${skipLabel(mark?.outroSeconds ?: 0)}"); add("从头播放"); add("弹幕 ${if(library.danmaku) "开启" else "关闭"}")
+                add(prefetchLabel())
                 if(library.danmaku) add("弹幕设置")
             },more,{ choice ->
                 main.post {
@@ -2358,7 +2472,8 @@ class MainActivity: Activity() {
                         5 -> showSkipPicker(more,false)
                         6 -> { seekTo(0); hidePanel() }
                         7 -> { library.danmaku=!library.danmaku; if(library.danmaku) startDanmaku() else stopDanmaku() }
-                        8 -> showDanmakuPrefsDialog(more)
+                        8 -> showPrefetchPicker(more)
+                        9 -> showDanmakuPrefsDialog(more)
                     }
                 }
             })
@@ -2456,6 +2571,21 @@ class MainActivity: Activity() {
             if(anchor.isAttachedToWindow) { anchor.requestFocus(); if(inPlayer) showHud() }
         }
         dialog.show(); dialog.listView.setSelection(selected); dialog.listView.requestFocus()
+    }
+    private fun prefetchLabel(): String {
+        val requested=library.prefetchCount; val effective=PrefetchPolicy.effectiveCount(requested,lowMemory)
+        return "后续集预缓存  ·  "+if(requested==0) "关闭" else "$requested 集"+(if(effective<requested) "（本机最多 $effective 集）" else "")
+    }
+    private fun showPrefetchPicker(anchor: TextView) {
+        val options=(0..PrefetchPolicy.MAX_COUNT).toList()
+        val dialog=AlertDialog.Builder(this).setTitle("后续集预缓存 · 仅非计费网络")
+            .setSingleChoiceItems(options.map { if(it==0) "关闭（不预先取流）" else "$it 集 · 仅缓存开头"+(if(lowMemory && it>1) "（本机最多 1 集）" else "") }.toTypedArray(),library.prefetchCount) { popup,index ->
+                library.prefetchCount=options[index]; cancelPrefetch()
+                if(anchor.tag!="playback-settings") anchor.text=prefetchLabel()
+                popup.dismiss()
+            }.setNegativeButton("取消",null).create()
+        dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
+        dialog.show()
     }
     private fun showQualityPicker(anchor: TextView,inPlayer: Boolean) {
         val options=PlaybackQuality.options
@@ -2581,9 +2711,19 @@ class MainActivity: Activity() {
         danmakuLoader=loader
         layer.bind(loader,{ currentPosition() })
         val startPosition=currentPosition()
-        io.execute { runCatching { loader.loadUpTo(startPosition) } }
+        loadDanmaku(loader,startPosition)
+    }
+    private fun loadDanmaku(loader: DanmakuLoader,position: Long) {
+        if(!foreground || danmakuJob?.isDone==false) return
+        val scope=RequestScope(); danmakuScope=scope
+        danmakuJob=danmakuWorker.submit { runCatching { scope.run { loader.loadUpTo(position) } } }
+    }
+    private fun cancelDanmakuWork() {
+        danmakuScope?.cancel(); danmakuScope=null; danmakuJob?.cancel(true); danmakuJob=null
+        (danmakuWorker as? java.util.concurrent.ThreadPoolExecutor)?.purge()
     }
     private fun stopDanmaku() {
+        cancelDanmakuWork()
         danmakuLoader=null
         danmakuView?.unbind()
     }
@@ -2597,7 +2737,7 @@ class MainActivity: Activity() {
         playerListener?.let { player?.removeListener(it) }; playerListener=null
         video?.close(); video=null; playerView?.player=null; playerView=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
         stopDanmaku(); danmakuView=null
-        closeTransport(playbackHttp); playbackHttp=null
+        closeTransport(playbackHttp); playbackHttp=null; releaseRetiredPlayback()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
     private fun returnToDetail(forceDetail: Boolean=false) {
@@ -2676,7 +2816,7 @@ class MainActivity: Activity() {
         } else libraryLoadError?.let(::showLibraryError)
     }
     override fun onPause() {
-        foreground=false; main.removeCallbacks(tick); cancelRecovery(); cancelPrefetch(); mediaSession.deactivate()
+        foreground=false; main.removeCallbacks(tick); cancelRecovery(); cancelPrefetch(); cancelRecommendations(); cancelDanmakuWork(); mediaSession.deactivate()
         sleepTimer.cancel(); favoriteMonitor.stop(); detailAutoplay=false; requestedAutoplay=false; pausedForLifecycle=true
         player?.pause(); saveProgress(); library.flush(); super.onPause()
     }
@@ -2691,11 +2831,11 @@ class MainActivity: Activity() {
         if(level>=android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) cancelPrefetch()
     }
     override fun onDestroy() {
-        generation++; cancelWork()
+        generation++; cancelWork(); cancelRecommendations()
         if(networkRegistered) connectivity.unregisterNetworkCallback(networkCallback)
         favoriteMonitor.destroy(); tvTools.destroy(); saveProgress(); releasePlayer(); library.close()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
-        io.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()
+        io.shutdownNow(); prefetchWorker.shutdownNow(); recommendationWorker.shutdownNow(); danmakuWorker.shutdownNow(); networkCleanup.shutdown()
         Thread({ repository.http.dispatcher.cancelAll(); repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown() },"hongguotv-network-cleanup").start()
         super.onDestroy()
     }

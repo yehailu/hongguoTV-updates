@@ -7,6 +7,7 @@ import androidx.media3.exoplayer.RenderersFactory
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 
 /** sw flavor: FFmpeg software decoders (HEVC/H.264/VP9/AV1) as Media3 extension renderers. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 object DecodeSupport {
     const val softwareAvailable=true
     fun renderers(context: Context,preferSoftware: Boolean): RenderersFactory =

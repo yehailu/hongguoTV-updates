@@ -197,19 +197,20 @@ class DanmakuLoaderTest {
 
     @Test fun failuresBackOffAndEventuallyGiveUpSilently() {
         val (loader, requested) = loader(600_000) { throw IOException("offline") }
+        val attemptsPerWindow=6 // A single loader failure exhausts the repository's host fallback.
         loader.loadUpTo(0)
-        assertEquals(1, requested.size)
+        assertEquals(attemptsPerWindow, requested.size)
         loader.loadUpTo(0)
-        assertEquals(1, requested.size)
+        assertEquals(attemptsPerWindow, requested.size)
         now += 31_000
         loader.loadUpTo(0)
-        assertEquals(2, requested.size)
+        assertEquals(2*attemptsPerWindow, requested.size)
         now += 31_000
         loader.loadUpTo(0)
-        assertEquals(3, requested.size)
+        assertEquals(3*attemptsPerWindow, requested.size)
         now += 31_000
         loader.loadUpTo(0)
-        assertEquals(3, requested.size)
+        assertEquals(3*attemptsPerWindow, requested.size)
     }
 
     @Test fun betweenFiltersByOffsetRange() {

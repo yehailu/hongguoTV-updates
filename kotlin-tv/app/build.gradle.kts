@@ -9,19 +9,20 @@ val pkgSuffix = (System.getenv("HONGGUOTV_PKG_SUFFIX") ?: (project.findProperty(
 // 桌面/电视上的显示名，默认沿用原标题
 val appLabel = (System.getenv("HONGGUOTV_APP_LABEL") ?: (project.findProperty("appLabel") as String?))
     ?.takeIf { it.isNotBlank() } ?: "红果TV"
-// 最低系统：-PminSdk=24 或环境变量 HONGGUOTV_MIN_SDK，用于兼容老电视（默认 26）
+// 最低系统：-PminSdk=24 或环境变量 HONGGUOTV_MIN_SDK，用于兼容老电视（默认 27）
 val minSdkVersion = (System.getenv("HONGGUOTV_MIN_SDK") ?: (project.findProperty("minSdk") as String?))
     ?.toIntOrNull() ?: 27
 
 android {
     namespace = "com.hongguotv.nativeapp"
     compileSdk = 36
+    buildToolsVersion = "36.1.0"
     defaultConfig {
         applicationId = if (pkgSuffix == null) "com.hongguotv.nativeapp" else "com.hongguotv.nativeapp.$pkgSuffix"
         minSdk = minSdkVersion
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 52
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.26.9"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 54
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.27.0-test.1"
         resValue("string", "app_name", appLabel)
         // TV boxes stay landscape; phone builds pass -PscreenOrientation=unspecified.
         manifestPlaceholders["screenOrientation"] =

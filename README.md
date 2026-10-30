@@ -23,6 +23,18 @@
 | hongguotv-0.XX.X-hw-phone-debug.apk | 手机 / 平板（可转屏） | Android 8.0+ |
 | hongguotv-0.XX.X-android5-debug.apk | 老旧设备 | Android 5.0+ |
 
+## 0.27.0-test.1 测试构建与 Android 4.1 适配
+
+[测试版安装与发布说明](RELEASE_0.27.0_TEST.md) · [测试版入口](https://cnb.cool/lzyr9010/hongguoTV-updates/-/releases/tag/v0.27.0-test.1)
+
+**测试版不设为 latest，不触发稳定客户端自动更新。与原发布版本签名不同，不能直接覆盖；请先备份收藏和进度，再卸载原版、手动安装和恢复记录。** 上方“最新安装包”仍是稳定入口。
+
+已加入选集与推荐分离加载、后续集开头预缓存（关闭/1–3 集，默认 1 集）及独立 Android 4.1–4.4 / API16 兼容构建。预缓存只在非计费网络、当前播放稳定且缓冲充足时启动，低内存设备实际最多 1 集。
+
+兼容版不是简单下调 minSdk：使用 ExoPlayer 2.18.7、旧系统 TLS/API/主题/多 dex 适配；不包含 Android 4.0，也不包含 FFmpeg 视频软解，片源能否播放仍取决于设备解码能力。
+
+[策略、构建、验证和安装边界](PERFORMANCE_ANDROID41.md)。测试版增加 `a41` 包，Android 5 稳定支线不改动。
+
 ## 使用
 
 1. 从 Release 页面下载对应安装包，安装到设备（首次安装需允许「安装未知来源应用」）。

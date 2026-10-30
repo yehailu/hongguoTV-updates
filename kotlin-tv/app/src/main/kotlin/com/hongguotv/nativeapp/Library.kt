@@ -174,6 +174,9 @@ class Library(context: Context) {
     var maxQuality: Int
         get() = state().settings.quality
         set(value) { val next = PlaybackQuality.normalize(value); if (next != maxQuality) { state().settings = state().settings.copy(quality = next); put("quality", next) } }
+    var prefetchCount: Int
+        get() = state().settings.prefetchCount
+        set(value) { val next = PrefetchPolicy.count(value); if (next != prefetchCount) { state().settings = state().settings.copy(prefetchCount = next); put("prefetchCount", next) } }
     var autoNext: Boolean
         get() = state().settings.autoNext
         set(value) { if (value != autoNext) { state().settings = state().settings.copy(autoNext = value); put("autoNext", value) } }
@@ -252,7 +255,8 @@ class Library(context: Context) {
             "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name },
             "autoSeason" to { merged.settings.autoSeason }, "danmaku" to { merged.settings.danmaku },
             "danmakuOpacity" to { merged.settings.danmakuOpacity }, "danmakuFont" to { merged.settings.danmakuFont },
-            "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows }))
+            "danmakuSpeed" to { merged.settings.danmakuSpeed }, "danmakuRows" to { merged.settings.danmakuRows },
+            "prefetchCount" to { merged.settings.prefetchCount }))
         flush()
     }
     /** Requests prompt background commit, without lifecycle-thread disk waits. */

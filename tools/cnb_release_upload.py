@@ -347,6 +347,11 @@ def preflight(directory, tag, metadata_reader=apk_metadata):
     return [assets[name] for name in sorted(assets, key=lambda n: (n == "update.json", n))]
 
 
+def _release_commit(release, fallback=None):
+    # CNB reports the peeled tag SHA as tag_commitish, not target_commitish.
+    return release.get("tag_commitish") or release.get("target_commitish", fallback)
+
+
 def release_id(client, tag, title=None, notes=None, target_commit=None, prerelease=False):
     tag = validate_tag(tag)
     status, payload = client.call("GET", f"{API}/{REPO}/-/releases/tags/{tag}")
@@ -354,7 +359,7 @@ def release_id(client, tag, title=None, notes=None, target_commit=None, prerelea
         release = _json(payload, "release")
         if prerelease and release.get("prerelease") is not True:
             raise ReleaseError("Refusing to change an existing stable release in test mode")
-        if target_commit and release.get("target_commitish") != target_commit:
+        if target_commit and _release_commit(release) != target_commit:
             raise ReleaseError("Existing release targets a different commit")
         return _release_key(release.get("id")), release
     if status != 404:
@@ -368,7 +373,7 @@ def release_id(client, tag, title=None, notes=None, target_commit=None, prerelea
     })
     _expect(status, "release creation")
     release = _json(payload, "release creation")
-    if release.get("prerelease") is False or (target_commit and release.get("target_commitish", target_commit) != target_commit):
+    if release.get("prerelease") is False or (target_commit and _release_commit(release, target_commit) != target_commit):
         raise ReleaseError("Created release does not match requested safety settings")
     return _release_key(release.get("id")), release
 
@@ -433,6 +438,8 @@ def main(argv=None, client=None, metadata_reader=None):
         is_test = args.prerelease or args.no_latest
         release, existing = release_id(client, args.tag, args.title, args.notes, args.target_commit, is_test)
         present = existing.get("assets", [])
+        if present is None:
+            present = []
         if not isinstance(present, list):
             raise ReleaseError("Invalid existing release asset list")
         collisions = {item.get("name") for item in present if isinstance(item, dict)} & {asset.name for asset in assets}

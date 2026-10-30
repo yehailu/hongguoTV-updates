@@ -331,6 +331,59 @@ class PublisherTest(unittest.TestCase):
         client.call = respond
         self.assertEqual(1,self.invoke(client)[0])
         self.assertFalse(any(method=="PATCH" for method,_,_ in client.calls))
+    def test_cnb_creation_dto_accepts_tag_commitish_and_null_assets(self):
+        client = FakeClient()
+        original = client.call
+        def real_shape(method,url,body=None):
+            status,payload = original(method,url,body)
+            if method == "POST" and url.endswith("/-/releases"):
+                payload = json.dumps({"id":"r1", "prerelease":True, "tag_commitish":SHA, "assets":None}).encode()
+            return status,payload
+        client.call = real_shape
+        result,_,error = self.invoke(client,("--prerelease","--no-latest"))
+        self.assertEqual(0,result,error)
+        self.assertEqual(2,len(client.puts))
+        self.assertFalse(any(method=="PATCH" for method,_,_ in client.calls))
+
+    def test_cnb_existing_tag_commitish_precedes_legacy_target(self):
+        for assets in (None,[]):
+            with self.subTest(assets=assets):
+                client = FakeClient()
+                client.existing = {"id":"r1", "prerelease":True, "tag_commitish":SHA, "target_commitish":"main", "assets":assets}
+                result,_,error = self.invoke(client,("--no-latest",))
+                self.assertEqual(0,result,error)
+                self.assertEqual(2,len(client.puts))
+                self.assertFalse(any(method=="PATCH" for method,_,_ in client.calls))
+
+    def test_wrong_tag_commitish_is_rejected_for_existing_and_created_release(self):
+        for created in (False,True):
+            with self.subTest(created=created):
+                client = FakeClient()
+                wrong = {"id":"r1", "prerelease":True, "tag_commitish":"b"*40, "target_commitish":SHA, "assets":None}
+                if created:
+                    original = client.call
+                    def real_shape(method,url,body=None):
+                        status,payload = original(method,url,body)
+                        if method=="POST" and url.endswith("/-/releases"):
+                            payload=json.dumps(wrong).encode()
+                        return status,payload
+                    client.call=real_shape
+                else:
+                    client.existing=wrong
+                result,_,_ = self.invoke(client,("--no-latest",))
+                self.assertEqual(1,result)
+                self.assertFalse(client.puts)
+                self.assertFalse(any(method=="PATCH" for method,_,_ in client.calls))
+
+    def test_only_null_assets_is_normalized_other_non_lists_fail_closed(self):
+        for malformed in ({},"[]",False,0,12):
+            with self.subTest(assets=malformed):
+                client=FakeClient()
+                client.existing={"id":"r1", "prerelease":True, "tag_commitish":SHA, "assets":malformed}
+                result,_,error=self.invoke(client,("--no-latest",))
+                self.assertEqual(1,result)
+                self.assertIn("Invalid existing release asset list",error)
+                self.assertFalse(client.puts)
 
 
 if __name__ == "__main__":

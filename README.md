@@ -51,7 +51,7 @@
 - 官方弹幕开关、播放器倍速菜单、自定义快捷键、画面大小调节
 - 提供 Windows 10 / 11 64 位安装版与便携版，另有源码包
 
-项目地址：[https://cnb.cool/lzyr9010/hongguoTV-PC](https://cnb.cool/lzyr9010/hongguoTV-PC)
+项目地址：[https://github.com/yehailu/hongguoTV-updates](https://github.com/yehailu/hongguoTV-updates)
 
 ## 使用
 

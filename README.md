@@ -2,7 +2,7 @@
 
 红果短剧的电视 / 手机 / 车机第三方客户端，开源（GPL-3.0）。单个安装包即可运行，无需自建服务、无需登录。
 
-**[⬇ 下载最新安装包](https://cnb.cool/lzyr9010/hongguoTV-updates/-/releases/latest)**
+**[⬇ 下载最新安装包](https://github.com/yehailu/hongguoTV-updates/releases)**
 
 ## 能做什么
 
